@@ -32,6 +32,7 @@ export interface DesktopModelProxyResponse {
 
 export interface DesktopModelApiKeyStatus {
   available: boolean;
+  storage?: "none" | "credential_store" | "encrypted_file" | string;
 }
 
 export type DesktopLocalFileNodeKind = "file" | "directory";

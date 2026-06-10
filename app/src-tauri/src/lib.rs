@@ -3,17 +3,25 @@ use reqwest::header::{ACCEPT, CONTENT_TYPE, USER_AGENT};
 use serde::{Deserialize, Serialize};
 use std::{
     env,
+    ffi::c_void,
     fs,
+    io,
     path::{Component, Path, PathBuf},
     process::{Command, Stdio},
+    slice,
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
+use tauri::{AppHandle, Manager};
 
 #[cfg(target_os = "windows")]
 use windows::{
-    core::{PCWSTR, HRESULT},
+    core::{w, PCWSTR, HRESULT},
     Win32::{
+        Foundation::{LocalFree, HLOCAL},
+        Security::Cryptography::{
+            CryptProtectData, CryptUnprotectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
+        },
         System::Com::{
             CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER,
             COINIT_APARTMENTTHREADED,
@@ -29,6 +37,10 @@ mod docx_export;
 
 const MODEL_CREDENTIAL_SERVICE: &str = "com.nodora.model-api";
 const MODEL_CREDENTIAL_ACCOUNT: &str = "default";
+const MODEL_API_KEY_ENCRYPTED_FILE: &str = "model-api-key.dpapi";
+const MODEL_API_KEY_STORAGE_NONE: &str = "none";
+const MODEL_API_KEY_STORAGE_CREDENTIAL_STORE: &str = "credential_store";
+const MODEL_API_KEY_STORAGE_ENCRYPTED_FILE: &str = "encrypted_file";
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -189,6 +201,7 @@ struct ModelApiKeyWriteRequest {
 #[serde(rename_all = "camelCase")]
 struct ModelApiKeyStatus {
     available: bool,
+    storage: String,
 }
 
 #[derive(Serialize)]
@@ -308,6 +321,13 @@ fn model_api_key_entry() -> Result<Entry, String> {
         .map_err(|error| format!("Failed to open OS credential store: {error}"))
 }
 
+fn model_api_key_status(storage: &str) -> ModelApiKeyStatus {
+    ModelApiKeyStatus {
+        available: storage != MODEL_API_KEY_STORAGE_NONE,
+        storage: storage.to_string(),
+    }
+}
+
 fn read_model_api_key_from_store() -> Result<Option<String>, String> {
     let entry = model_api_key_entry()?;
     match entry.get_password() {
@@ -324,7 +344,167 @@ fn read_model_api_key_from_store() -> Result<Option<String>, String> {
     }
 }
 
-fn resolve_model_api_key(request_api_key: Option<&str>) -> Result<String, String> {
+fn model_api_key_encrypted_file_path(app: &AppHandle) -> Result<PathBuf, String> {
+    app.path()
+        .app_local_data_dir()
+        .map(|path| path.join(MODEL_API_KEY_ENCRYPTED_FILE))
+        .map_err(|error| format!("Failed to resolve local encrypted credential path: {error}"))
+}
+
+#[cfg(target_os = "windows")]
+fn dpapi_encrypt_model_api_key(api_key: &str) -> Result<Vec<u8>, String> {
+    let mut input_bytes = api_key.as_bytes().to_vec();
+    let input_blob = CRYPT_INTEGER_BLOB {
+        cbData: input_bytes
+            .len()
+            .try_into()
+            .map_err(|_| "Model API key is too large to encrypt.".to_string())?,
+        pbData: input_bytes.as_mut_ptr(),
+    };
+    let mut output_blob = CRYPT_INTEGER_BLOB::default();
+
+    unsafe {
+        CryptProtectData(
+            &input_blob,
+            w!("Nodora model API key"),
+            None,
+            None,
+            None,
+            CRYPTPROTECT_UI_FORBIDDEN,
+            &mut output_blob,
+        )
+        .map_err(|error| format!("Failed to encrypt model API key with Windows DPAPI: {error}"))?;
+
+        let encrypted = slice::from_raw_parts(output_blob.pbData, output_blob.cbData as usize).to_vec();
+        let _ = LocalFree(Some(HLOCAL(output_blob.pbData as *mut c_void)));
+        Ok(encrypted)
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn dpapi_encrypt_model_api_key(_api_key: &str) -> Result<Vec<u8>, String> {
+    Err("Encrypted local API key fallback is only available on Windows.".to_string())
+}
+
+#[cfg(target_os = "windows")]
+fn dpapi_decrypt_model_api_key(encrypted: &[u8]) -> Result<String, String> {
+    if encrypted.is_empty() {
+        return Ok(String::new());
+    }
+
+    let mut encrypted_bytes = encrypted.to_vec();
+    let input_blob = CRYPT_INTEGER_BLOB {
+        cbData: encrypted_bytes
+            .len()
+            .try_into()
+            .map_err(|_| "Encrypted model API key file is too large.".to_string())?,
+        pbData: encrypted_bytes.as_mut_ptr(),
+    };
+    let mut output_blob = CRYPT_INTEGER_BLOB::default();
+
+    unsafe {
+        CryptUnprotectData(
+            &input_blob,
+            None,
+            None,
+            None,
+            None,
+            CRYPTPROTECT_UI_FORBIDDEN,
+            &mut output_blob,
+        )
+        .map_err(|error| format!("Failed to decrypt model API key with Windows DPAPI: {error}"))?;
+
+        let decrypted_bytes = slice::from_raw_parts(output_blob.pbData, output_blob.cbData as usize).to_vec();
+        let _ = LocalFree(Some(HLOCAL(output_blob.pbData as *mut c_void)));
+        String::from_utf8(decrypted_bytes)
+            .map_err(|error| format!("Encrypted model API key is not valid UTF-8: {error}"))
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn dpapi_decrypt_model_api_key(_encrypted: &[u8]) -> Result<String, String> {
+    Err("Encrypted local API key fallback is only available on Windows.".to_string())
+}
+
+fn save_model_api_key_to_encrypted_file(app: &AppHandle, api_key: &str) -> Result<(), String> {
+    let path = model_api_key_encrypted_file_path(app)?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|error| format!("Failed to create encrypted credential directory: {error}"))?;
+    }
+
+    let encrypted = dpapi_encrypt_model_api_key(api_key)?;
+    fs::write(&path, encrypted)
+        .map_err(|error| format!("Failed to write encrypted model API key fallback: {error}"))
+}
+
+fn read_model_api_key_from_encrypted_file(app: &AppHandle) -> Result<Option<String>, String> {
+    let path = model_api_key_encrypted_file_path(app)?;
+    let encrypted = match fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(format!(
+                "Failed to read encrypted model API key fallback: {error}"
+            ))
+        }
+    };
+
+    let trimmed = dpapi_decrypt_model_api_key(&encrypted)?.trim().to_string();
+    if trimmed.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(trimmed))
+    }
+}
+
+fn delete_model_api_key_encrypted_file(app: &AppHandle) -> Result<(), String> {
+    let path = model_api_key_encrypted_file_path(app)?;
+    match fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!(
+            "Failed to delete encrypted model API key fallback: {error}"
+        )),
+    }
+}
+
+fn read_stored_model_api_key(app: &AppHandle) -> Result<Option<(String, String)>, String> {
+    match read_model_api_key_from_store() {
+        Ok(Some(api_key)) => {
+            return Ok(Some((
+                api_key,
+                MODEL_API_KEY_STORAGE_CREDENTIAL_STORE.to_string(),
+            )))
+        }
+        Ok(None) => {}
+        Err(store_error) => match read_model_api_key_from_encrypted_file(app) {
+            Ok(Some(api_key)) => {
+                return Ok(Some((
+                    api_key,
+                    MODEL_API_KEY_STORAGE_ENCRYPTED_FILE.to_string(),
+                )))
+            }
+            Ok(None) => return Err(store_error),
+            Err(fallback_error) => {
+                return Err(format!(
+                    "{store_error}; encrypted fallback read also failed: {fallback_error}"
+                ))
+            }
+        },
+    }
+
+    read_model_api_key_from_encrypted_file(app).map(|fallback| {
+        fallback.map(|api_key| {
+            (
+                api_key,
+                MODEL_API_KEY_STORAGE_ENCRYPTED_FILE.to_string(),
+            )
+        })
+    })
+}
+
+fn resolve_model_api_key(app: &AppHandle, request_api_key: Option<&str>) -> Result<String, String> {
     if let Some(api_key) = request_api_key {
         let trimmed = api_key.trim();
         if !trimmed.is_empty() {
@@ -332,48 +512,77 @@ fn resolve_model_api_key(request_api_key: Option<&str>) -> Result<String, String
         }
     }
 
-    read_model_api_key_from_store()?
+    read_stored_model_api_key(app)?
+        .map(|stored| stored.0)
         .ok_or_else(|| "API Key is required for model proxy requests.".to_string())
 }
 
 #[tauri::command]
-fn get_model_api_key_status() -> Result<ModelApiKeyStatus, String> {
-    Ok(ModelApiKeyStatus {
-        available: read_model_api_key_from_store()?.is_some(),
-    })
+fn get_model_api_key_status(app: AppHandle) -> Result<ModelApiKeyStatus, String> {
+    match read_stored_model_api_key(&app) {
+        Ok(Some((_, storage))) => Ok(model_api_key_status(&storage)),
+        Ok(None) => Ok(model_api_key_status(MODEL_API_KEY_STORAGE_NONE)),
+        Err(_) => Ok(model_api_key_status(MODEL_API_KEY_STORAGE_NONE)),
+    }
 }
 
 #[tauri::command]
-fn save_model_api_key(request: ModelApiKeyWriteRequest) -> Result<ModelApiKeyStatus, String> {
+fn save_model_api_key(app: AppHandle, request: ModelApiKeyWriteRequest) -> Result<ModelApiKeyStatus, String> {
     let api_key = request.api_key.trim();
     if api_key.is_empty() {
-        return Err("API Key is required before saving to the OS credential store.".to_string());
+        return Err("API Key is required before saving to local secure storage.".to_string());
     }
 
-    model_api_key_entry()?
-        .set_password(api_key)
-        .map_err(|error| format!("Failed to save model API key to OS credential store: {error}"))?;
+    let credential_saved = match model_api_key_entry().and_then(|entry| {
+        entry
+            .set_password(api_key)
+            .map_err(|error| format!("Failed to save model API key to OS credential store: {error}"))
+    }) {
+        Ok(()) => matches!(read_model_api_key_from_store(), Ok(Some(stored_api_key)) if stored_api_key == api_key),
+        Err(_) => false,
+    };
 
-    if read_model_api_key_from_store()?.is_none() {
-        return Err("OS credential store did not return the saved model API key.".to_string());
+    let fallback_saved = save_model_api_key_to_encrypted_file(&app, api_key).is_ok();
+
+    if credential_saved {
+        return Ok(model_api_key_status(MODEL_API_KEY_STORAGE_CREDENTIAL_STORE));
     }
 
-    Ok(ModelApiKeyStatus { available: true })
+    if fallback_saved {
+        return Ok(model_api_key_status(MODEL_API_KEY_STORAGE_ENCRYPTED_FILE));
+    }
+
+    Err(
+        "Failed to save API Key to Windows Credential Manager or encrypted local storage."
+            .to_string(),
+    )
 }
 
 #[tauri::command]
-fn delete_model_api_key() -> Result<ModelApiKeyStatus, String> {
-    let entry = model_api_key_entry()?;
-    match entry.delete_credential() {
-        Ok(()) | Err(keyring::Error::NoEntry) => Ok(ModelApiKeyStatus { available: false }),
-        Err(error) => Err(format!(
-            "Failed to delete model API key from OS credential store: {error}"
-        )),
+fn delete_model_api_key(app: AppHandle) -> Result<ModelApiKeyStatus, String> {
+    let credential_delete_result = match model_api_key_entry() {
+        Ok(entry) => match entry.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Err(error) => Err(format!(
+                "Failed to delete model API key from OS credential store: {error}"
+            )),
+        },
+        Err(error) => Err(error),
+    };
+    let fallback_delete_result = delete_model_api_key_encrypted_file(&app);
+
+    match (credential_delete_result, fallback_delete_result) {
+        (Ok(()), Ok(())) => Ok(model_api_key_status(MODEL_API_KEY_STORAGE_NONE)),
+        (Err(credential_error), Ok(())) => Err(credential_error),
+        (Ok(()), Err(fallback_error)) => Err(fallback_error),
+        (Err(credential_error), Err(fallback_error)) => {
+            Err(format!("{credential_error}; {fallback_error}"))
+        }
     }
 }
 
 #[tauri::command]
-async fn proxy_model_request(request: ModelProxyRequest) -> Result<ModelProxyResponse, String> {
+async fn proxy_model_request(app: AppHandle, request: ModelProxyRequest) -> Result<ModelProxyResponse, String> {
     let url = build_proxy_url(&request.api_base_url, &request.path)?;
     let method = match request.method.trim().to_ascii_uppercase().as_str() {
         "GET" => reqwest::Method::GET,
@@ -381,7 +590,7 @@ async fn proxy_model_request(request: ModelProxyRequest) -> Result<ModelProxyRes
         value => return Err(format!("Unsupported model proxy method: {value}")),
     };
 
-    let api_key = resolve_model_api_key(request.api_key.as_deref())?;
+    let api_key = resolve_model_api_key(&app, request.api_key.as_deref())?;
 
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(90))
@@ -2094,6 +2303,20 @@ fn prefix_project_path(prefix: &str, path: &str) -> String {
 mod tests {
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn dpapi_model_api_key_round_trip_keeps_secret_local() {
+        let secret = "sk-test-dpapi-round-trip";
+        let encrypted = dpapi_encrypt_model_api_key(secret).expect("encrypt model API key");
+
+        assert!(!encrypted.is_empty());
+        assert_ne!(encrypted, secret.as_bytes());
+        assert_eq!(
+            dpapi_decrypt_model_api_key(&encrypted).expect("decrypt model API key"),
+            secret
+        );
+    }
 
     #[test]
     fn duckduckgo_results_extract_titles_links_and_snippets() {

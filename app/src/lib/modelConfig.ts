@@ -162,8 +162,8 @@ export async function testModelConnection(
       ok: false,
       message: modelConfigText(
         language,
-        "请填写 API Key。桌面版会保存到系统凭据库；浏览器版仅保存在当前会话中，不写入项目文件夹。",
-        "Enter the API Key. The desktop app stores it in the OS credential store; the browser fallback keeps it only for the current session.",
+        "请填写 API Key。桌面版会保存到本机安全存储；浏览器版仅保存在当前会话中，不写入项目文件夹。",
+        "Enter the API Key. The desktop app stores it in local secure storage; the browser fallback keeps it only for the current session.",
       ),
     };
   }
