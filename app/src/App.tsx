@@ -3516,9 +3516,9 @@ export function App() {
           const status = await saveModelApiKeyToCredentialStore(apiKeyToMigrate);
           clearPersistedModelApiKeys();
           if (!disposed) {
-            setModelApiKey("");
+            setModelApiKey(apiKeyToMigrate);
             setStoredModelApiKeyAvailable(status.available);
-            setModelStatus(modelStatusFromConfig(modelConfig, "", status.available));
+            setModelStatus(modelStatusFromConfig(modelConfig, apiKeyToMigrate, status.available));
           }
           return;
         }
@@ -5299,8 +5299,11 @@ export function App() {
 
   async function handleSaveModelConfig(nextConfig: ModelProviderConfig, nextApiKey: string) {
     const trimmedApiKey = nextApiKey.trim();
+    const currentSessionApiKey = modelApiKey.trim();
+    const nextSessionApiKey = trimmedApiKey || currentSessionApiKey;
     let hasCredential = storedModelApiKeyAvailable;
     let saveMessage = "";
+    let statusApiKey = trimmedApiKey;
 
     saveModelConfig(nextConfig);
 
@@ -5314,11 +5317,13 @@ export function App() {
           hasCredential = status.available;
         }
         clearPersistedModelApiKeys();
-        setModelApiKey("");
+        setModelApiKey(nextSessionApiKey);
+        statusApiKey = nextSessionApiKey;
       } catch (error) {
         hasCredential = false;
-        saveModelApiKey(trimmedApiKey);
-        setModelApiKey(trimmedApiKey);
+        saveModelApiKey(nextSessionApiKey);
+        setModelApiKey(nextSessionApiKey);
+        statusApiKey = nextSessionApiKey;
         saveMessage = error instanceof Error ? error.message : String(error);
       }
     } else {
@@ -5329,7 +5334,7 @@ export function App() {
 
     setStoredModelApiKeyAvailable(hasCredential);
     setModelConfig(nextConfig);
-    setModelStatus(modelStatusFromConfig(nextConfig, hasCredential ? "" : trimmedApiKey, hasCredential));
+    setModelStatus(modelStatusFromConfig(nextConfig, statusApiKey, hasCredential));
     setModelStatusMessage(
       saveMessage || (hasCredential || trimmedApiKey ? labels.modelConfigSavedWithKey : labels.modelConfigSavedWithoutKey),
     );
@@ -9758,7 +9763,7 @@ export function App() {
         <ModelConfigDialog
           labels={labels}
           config={modelConfig}
-          apiKey={modelApiKey}
+          apiKey={storedModelApiKeyAvailable && supportsDesktopBackendInvoke() ? "" : modelApiKey}
           status={modelStatus}
           statusMessage={modelStatusMessage}
           onClose={() => setModelDialogOpen(false)}

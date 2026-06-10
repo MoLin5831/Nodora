@@ -354,6 +354,10 @@ fn save_model_api_key(request: ModelApiKeyWriteRequest) -> Result<ModelApiKeySta
         .set_password(api_key)
         .map_err(|error| format!("Failed to save model API key to OS credential store: {error}"))?;
 
+    if read_model_api_key_from_store()?.is_none() {
+        return Err("OS credential store did not return the saved model API key.".to_string());
+    }
+
     Ok(ModelApiKeyStatus { available: true })
 }
 
