@@ -93,6 +93,7 @@ id_ed25519.*
 Thumbs.db
 desktop.ini
 .idea/
+.cursor/
 .vscode/*
 !.vscode/extensions.json
 !.vscode/settings.example.json
