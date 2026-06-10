@@ -22,7 +22,7 @@ Nodora 不是通用 Markdown 编辑器，也不是本地 Agent 运行器或零�
 - `app/.env` 只用于本机，不提交到 Git；仓库只保留 `app/.env.example`。
 - 项目不包含本地 Agent 模式、Agent CLI、命令执行入口、后台 Agent、多 Agent 编排或内置生图能力。
 
-更多细节见 [SECURITY.md](SECURITY.md) 和 [docs/security-review.md](docs/security-review.md)。
+更多细节见 [SECURITY.md](SECURITY.md)。
 
 ## 环境要求
 
@@ -100,7 +100,6 @@ workflow_prototype/
 
 - [架构说明](docs/architecture.md)
 - [路线图](docs/roadmap.md)
-- [安全审查](docs/security-review.md)
 - [GitHub 发布边界](docs/github-publish-boundary.md)
 - [贡献指南](CONTRIBUTING.md)
 
