@@ -1,18 +1,18 @@
 ---
-description: Secret handling and GitHub publishing safety
+description: 密钥处理与 GitHub 发布安全规则
 alwaysApply: true
 ---
 
-# Secret Handling
+# 密钥处理
 
-- Do not read files excluded by `.cursorignore` or `.gitignore` unless the user explicitly asks and confirms the risk.
-- Do not add secrets, API keys, private keys, cookies, tokens, browser profiles, local databases, or production config to Git.
-- Treat `.env`, `.env.development`, `.env.production`, `.env.local`, `.env.*.local`, `secrets/`, `.secrets/`, `private/`, and `credentials/` as sensitive.
-- Committed `.env.example` files may contain only non-secret environment selectors or placeholders.
-- If a secret may have been exposed, stop and tell the user to rotate or revoke it before continuing.
+- 除非用户明确要求并确认风险，不要读取 `.cursorignore` 或 `.gitignore` 排除的文件。
+- 不要把密钥、API Key、私钥、Cookie、Token、浏览器配置、本地数据库或生产配置加入 Git。
+- 将 `.env`、`.env.development`、`.env.production`、`.env.local`、`.env.*.local`、`secrets/`、`.secrets/`、`private/` 和 `credentials/` 视为敏感内容。
+- 已提交的 `.env.example` 只能包含非敏感的环境选择项或占位符。
+- 如果密钥可能已经暴露，应停止继续操作，并提醒用户先轮换或吊销密钥。
 
-# Project Boundary
+# 项目边界
 
-- Do not restore local Agent mode, Agent CLI, command execution entry points, background agents, multi-agent orchestration, or built-in image generation.
-- Keep Nodora centered on the 14-step AI decision workflow.
-- Do not bypass user confirmation before changing the main planning document or memory files.
+- 不要恢复本地 Agent 模式、Agent CLI、命令执行入口、后台 Agent、多 Agent 编排或内置生图。
+- Nodora 必须围绕 14 步 AI 决策式策划案工作流推进。
+- 不要绕过用户确认直接修改主策划案或记忆文件。

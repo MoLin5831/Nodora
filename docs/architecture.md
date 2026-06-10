@@ -1,55 +1,55 @@
-# Architecture
+# 架构说明
 
-Nodora has three main layers:
+Nodora 主要由三层组成：
 
-1. React frontend for workflow UI, Markdown editing, AI conversation, project file tasks, export controls, and settings.
-2. Tauri backend for desktop-only capabilities such as selected-root file access, model API proxying, web search, PDF export, and DOCX export.
-3. Markdown project structure that stores context, decisions, planning documents, role translations, review reports, and workflow state.
+1. React 前端：负责工作流界面、Markdown 编辑、AI 对话、项目文件任务、导出控制和设置。
+2. Tauri 后端：提供桌面端能力，例如选定目录文件访问、模型 API 代理、联网搜索、PDF 导出和 DOCX 导出。
+3. Markdown 项目结构：保存项目背景、决策记录、策划文档、岗位转译、评审报告和工作流状态。
 
-## Workflow Model
+## 工作流模型
 
-The product is organized around a 14-step planning loop:
+产品围绕 14 步策划案闭环组织：
 
-1. Project context setup.
-2. AI clarification questions.
-3. User decision confirmation.
-4. Framework and outline generation.
-5. Style and granularity alignment.
-6. Main planning document drafting.
-7. Section-level review.
-8. Consistency review.
-9. Visual asset placeholder planning.
-10. Role translation.
-11. Task version generation.
-12. Version consistency check.
-13. Archive and memory update.
-14. Workflow retrospective.
+1. 项目背景建档。
+2. AI 澄清提问。
+3. 用户确认决策。
+4. 框架与目录生成。
+5. 语言风格和颗粒度对齐。
+6. 主策划案撰写。
+7. 分章节评审。
+8. 一致性评审。
+9. 视觉资产占位规划。
+10. 岗位转译。
+11. 任务版本生成。
+12. 版本一致性检查。
+13. 归档与记忆更新。
+14. 工作流复盘。
 
-The workflow treats AI output as draft material. Protected writes require user confirmation.
+工作流把 AI 输出视为草稿材料。受保护写入需要用户确认。
 
-## Frontend
+## 前端
 
-The frontend lives in `app/src/`.
+前端代码位于 `app/src/`。
 
-- `App.tsx` coordinates the current application shell and workflow state.
-- `lib/projectFileAgent.ts` parses and executes AI file task plans with confirmation boundaries.
-- `lib/aiProviders.ts` sends OpenAI-compatible requests.
-- `lib/modelConfig.ts` stores model provider configuration and session-only browser API key fallback state.
-- `components/MarkdownPreview.tsx` renders Markdown, Mermaid, and project image references.
+- `App.tsx` 协调整体应用壳、工作流状态和主要交互。
+- `lib/projectFileAgent.ts` 解析并执行 AI 文件任务计划，并保留确认边界。
+- `lib/aiProviders.ts` 发送 OpenAI-compatible 请求。
+- `lib/modelConfig.ts` 保存模型服务商配置和浏览器会话级 API Key 回退状态。
+- `components/MarkdownPreview.tsx` 渲染 Markdown、Mermaid 和项目图片引用。
 
-## Desktop Backend
+## 桌面后端
 
-The backend lives in `app/src-tauri/src/`.
+后端代码位于 `app/src-tauri/src/`。
 
-- `lib.rs` exposes Tauri commands for model proxying, web search, local file bridge, export, and project validation.
-- `docx_export.rs` converts export HTML into DOCX.
+- `lib.rs` 暴露 Tauri 命令，支持模型代理、联网搜索、本地文件桥、导出和项目校验。
+- `docx_export.rs` 将导出 HTML 转换为 DOCX。
 
-Local file commands canonicalize the selected project root and reject relative paths that escape that root.
+本地文件命令会规范化用户选择的项目根目录，并拒绝逃逸该根目录的相对路径。
 
-## Security Boundaries
+## 安全边界
 
-- The model proxy only supports controlled GET/POST requests to OpenAI-compatible paths.
-- Desktop model API keys are stored through the operating system credential store and read by the backend proxy.
-- Web search limits query length, result count, fetched pages, timeouts, and evidence size.
-- PDF export uses a temporary workspace under the selected project root and removes it after rendering.
-- Development diagnostics are hidden in production builds.
+- 模型代理只支持受控的 OpenAI-compatible GET/POST 请求路径。
+- 桌面端模型 API Key 通过操作系统凭据库存储，并由后端代理读取。
+- 联网搜索限制查询长度、结果数量、抓取页面数、超时时间和证据文本大小。
+- PDF 导出使用选定项目根目录下的临时工作区，并在渲染后清理。
+- 开发诊断面板在生产构建中隐藏。

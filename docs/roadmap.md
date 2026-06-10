@@ -1,26 +1,26 @@
-# Roadmap
+# 路线图
 
-## Before First Public Release
+## 首次公开发布前
 
-- Finish security review and publish the reviewed findings.
-- Add optional credential rotation and deletion controls for model API keys stored in the operating system credential store.
-- Split the largest `App.tsx` sections into focused components.
-- Add GitHub Actions after choosing an action-pinning strategy.
-- Add release packaging and signing strategy for desktop binaries.
+- 完成安全审查，并发布已审查的结论。
+- 为保存在操作系统凭据库中的模型 API Key 增加可选的轮换和删除入口。
+- 将体积较大的 `App.tsx` 片段拆分为更聚焦的组件。
+- 在确定 GitHub Actions 固定版本策略后添加 CI。
+- 为桌面端二进制文件补充发布打包和签名策略。
 
-## Product Direction
+## 产品方向
 
-- Strengthen the 14-step workflow as the primary user journey.
-- Improve first-run onboarding without turning Nodora into a generic Markdown editor.
-- Improve recovery paths for interrupted AI file tasks.
-- Add clearer evidence presentation for web research reports.
-- Keep visual asset support as planning placeholders and asset requirements.
+- 强化 14 步大闭环作为主要用户旅程。
+- 改善首次使用引导，但不把 Nodora 做成通用 Markdown 编辑器。
+- 改善 AI 文件任务中断后的恢复路径。
+- 为联网研究报告提供更清晰的证据展示。
+- 将视觉资产能力保持为图片需求占位和资产规划。
 
-## Explicit Non-Goals
+## 明确不做
 
-- Local Agent mode.
-- Agent CLI.
-- Local command execution from the UI.
-- Background agents.
-- Multi-agent orchestration.
-- Built-in image generation.
+- 本地 Agent 模式。
+- Agent CLI。
+- 从 UI 发起本地命令执行。
+- 后台 Agent。
+- 多 Agent 编排。
+- 内置生图。

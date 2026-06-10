@@ -1,12 +1,12 @@
-# Contributing
+# 贡献指南
 
-Nodora is currently an early desktop workflow project. Contributions should preserve its product boundary: AI decision workflow first, not a generic editor or local agent platform.
+Nodora 目前是早期桌面端工作流项目。任何贡献都应保持产品边界：优先服务 AI 决策式策划案工作流，而不是把它扩展成通用编辑器或本地 Agent 平台。
 
-## Development Workflow
+## 开发流程
 
-1. Create changes in a focused branch.
-2. Keep local-only files out of Git.
-3. Run the required checks before opening a pull request:
+1. 在聚焦的分支中完成改动。
+2. 不要把本地专用文件提交到 Git。
+3. 提交 Pull Request 前运行必要检查：
 
 ```powershell
 cd app
@@ -14,30 +14,30 @@ npm test
 npm run build
 ```
 
-If Rust backend code changes, also run:
+如果修改了 Rust 后端代码，还需要运行：
 
 ```powershell
 cd app\src-tauri
 cargo test
 ```
 
-## Product Boundaries
+## 产品边界
 
-Do not add or restore:
+不要添加或恢复以下能力：
 
-- local Agent mode
+- 本地 Agent 模式
 - Agent CLI
-- local command execution entry points
-- background agents
-- multi-agent orchestration
-- built-in image generation
+- 本地命令执行入口
+- 后台 Agent
+- 多 Agent 编排
+- 内置生图
 
-Visual asset support should remain a document workflow for describing needed images, not an embedded image generation feature.
+视觉资产能力应保持为“在文档中描述需要什么图片和放置位置”的策划流程，不应变成内置图片生成工具。
 
-## Security Expectations
+## 安全要求
 
-- Do not commit secrets or real `.env` files.
-- Do not commit build output, browser profiles, logs, or local databases.
-- Keep model keys out of project folders.
-- Keep local file operations scoped to the selected project root.
-- Preserve user confirmation before protected document writes, archive writes, deletes, moves, or memory updates.
+- 不要提交密钥或真实 `.env` 文件。
+- 不要提交构建产物、浏览器配置、日志或本地数据库。
+- 模型 Key 不应写入项目文件夹。
+- 本地文件操作必须限制在用户选择的项目根目录内。
+- 修改受保护文档、归档、删除、移动或更新记忆文件前，必须保留用户确认流程。

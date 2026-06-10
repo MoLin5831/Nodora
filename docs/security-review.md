@@ -1,48 +1,48 @@
-# Security Review
+# 安全审查
 
-Review date: 2026-06-10
+审查日期：2026-06-10
 
-## Scope
+## 范围
 
-This review covers the source files intended for GitHub publication:
+本次审查覆盖计划发布到 GitHub 的源码文件：
 
-- React frontend under `app/src/`
-- Tauri backend under `app/src-tauri/src/`
-- scripts under `app/scripts/`
-- public project templates under `project_template/` and `templates/`
-- repository governance files and public docs
+- `app/src/` 下的 React 前端。
+- `app/src-tauri/src/` 下的 Tauri 后端。
+- `app/scripts/` 下的脚本。
+- `project_template/` 和 `templates/` 下的公开项目模板。
+- 仓库治理文件和公开文档。
 
-The following local files are intentionally excluded from publication:
+以下本地文件被有意排除在发布范围之外：
 
 - `memory/`
 - `sample_project/`
 - `app_mvp_spec.md`
 - `app_implementation_plan.md`
-- dependency folders, build output, browser profiles, logs, real environment files, and release binaries
+- 依赖目录、构建产物、浏览器配置、日志、真实环境文件和 Release 二进制文件
 
-## Completed Hardening
+## 已完成加固
 
-- `.gitignore` now keeps real `.env` files local and allows only `.env.example`.
-- `app/.env` is ignored; `app/.env.example` is safe to commit.
-- Test fake keys no longer use real-provider-looking `sk-` prefixes.
-- Test output no longer uses the Node console logging API.
-- Tauri CLI wrapper no longer hardcodes a local cache path in its error message.
-- Tauri app config now has a CSP instead of `csp: null`.
-- PDF export cleanup no longer prints local temporary paths to stderr.
-- Local file bridge diagnostics are hidden in production builds.
-- Public docs now describe security boundaries, non-goals, and leak response.
+- `.gitignore` 会把真实 `.env` 文件保留在本地，只允许 `.env.example` 入库。
+- `app/.env` 已被忽略；`app/.env.example` 可以安全提交。
+- 测试假 Key 不再使用像真实服务商密钥的 `sk-` 前缀。
+- 测试输出不再使用 Node 的 console logging API。
+- Tauri CLI 包装脚本不再在错误信息中硬编码本地缓存路径。
+- Tauri 应用配置已设置 CSP，不再使用 `csp: null`。
+- PDF 导出清理过程不再向 stderr 打印本地临时路径。
+- 本地文件桥诊断面板在生产构建中隐藏。
+- 公开文档已说明安全边界、明确不做事项和泄露处理方式。
 
-## Current Residual Risks
+## 当前剩余风险
 
-- Model API keys are stored in the operating system credential store in the Tauri desktop app. Browser fallback mode keeps keys only in session storage and clears legacy local-storage copies during migration.
-- The model API proxy accepts user-configured HTTP/HTTPS API bases. This supports OpenAI-compatible providers but should continue to be treated as a user-controlled desktop capability, not a hosted service proxy.
-- `App.tsx` remains large and should be split for maintainability.
-- GitHub Actions are not added yet; when added, actions should be pinned and workflow permissions should be minimized.
+- Tauri 桌面版会把模型 API Key 保存到操作系统凭据库。浏览器回退模式只在 session storage 中保留 Key，并会在迁移时清理历史 local storage 副本。
+- 模型 API 代理接受用户配置的 HTTP/HTTPS API Base。这是为了支持 OpenAI-compatible 服务商，应继续视为用户本机桌面能力，而不是托管代理服务。
+- `App.tsx` 仍然较大，后续需要为了可维护性进行组件拆分。
+- GitHub Actions 尚未添加；添加时应固定 Action 版本，并最小化 workflow 权限。
 
-## Verification Checklist
+## 验证清单
 
-- Run secret scanning before first push.
-- Run `npm test`.
-- Run `npm run build`.
-- Run `cargo test` after Rust backend changes.
-- Review staged files before commit with `git diff --cached --name-only`.
+- 首次推送前运行密钥扫描。
+- 运行 `npm test`。
+- 运行 `npm run build`。
+- 修改 Rust 后端后运行 `cargo test`。
+- 提交前使用 `git diff --cached --name-only` 检查暂存文件。

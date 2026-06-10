@@ -1,10 +1,10 @@
-# Agent Safety Rules
+# AI 协作安全规则
 
-These rules are advisory guardrails for AI coding assistants working in this repository. They do not replace `.gitignore`, secret scanning, or code review.
+本文件是给在本仓库中工作的 AI 编程助手使用的协作护栏。它不能替代 `.gitignore`、密钥扫描或人工代码审查。
 
-## Do Not Read Into LLM Context
+## 不要读取到 LLM 上下文
 
-Do not open, summarize, embed, or quote files matching:
+除非用户明确要求并确认风险，不要打开、总结、嵌入或引用以下文件：
 
 - `memory/`
 - `sample_project/`
@@ -21,22 +21,22 @@ Do not open, summarize, embed, or quote files matching:
 - `secrets/`
 - `private/`
 - `credentials/`
-- `*.pem`, `*.key`, `*.p12`, `*.pfx`
-- `id_rsa*`, `id_ed25519*`
-- browser profiles, cookies, tokens, databases, and local cache directories.
+- `*.pem`、`*.key`、`*.p12`、`*.pfx`
+- `id_rsa*`、`id_ed25519*`
+- 浏览器配置、Cookie、Token、数据库和本地缓存目录
 
-Committed `.env.example` files must contain only non-secret environment selectors or placeholders. Real `.env` files stay local.
+提交到仓库的 `.env.example` 只能包含非敏感的环境选择项或占位符。真实 `.env` 文件必须保留在本地。
 
-## Do Not Upload
+## 不要上传
 
-Never upload local build outputs, dependency folders, browser QA profiles, logs, private planning notes, or credentials. GitHub release binaries should be attached to Releases, not committed to source.
+不要上传本地构建产物、依赖目录、浏览器 QA 配置、日志、私有策划笔记或凭据。GitHub Release 二进制文件应作为 Release 附件发布，不要提交到源码仓库。
 
-## Leak Response
+## 泄露处理
 
-If a secret is read into context, committed, pushed, or exposed in logs:
+如果密钥被读取到上下文、提交、推送或暴露在日志中：
 
-1. Tell the user immediately.
-2. Ask the user to revoke or rotate the affected key, token, certificate, or password.
-3. Remove the secret from the working tree.
-4. Purge it from Git history before publishing.
-5. Review provider audit logs for unauthorized use.
+1. 立即告知用户。
+2. 提醒用户吊销或轮换受影响的 Key、Token、证书或密码。
+3. 从工作区删除泄露内容。
+4. 发布前从 Git 历史中清除泄露内容。
+5. 检查服务商审计日志，确认是否存在异常使用。
