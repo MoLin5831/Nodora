@@ -6,33 +6,11 @@ Nodora 目前是本地桌面端原型。安全报告和加固工作应重点关�
 
 ## 密钥处理
 
-不要提交任何密钥，包括 API Key、模型服务商 Key、OAuth Token、Cookie、浏览器配置、证书、私钥、本地数据库和生产配置。
-
-允许提交的环境文件仅限示例文件：
-
-- `app/.env.example`
-
-示例文件只能包含非敏感的环境选择项或占位符。真实环境文件，例如 `.env`、`.env.development`、`.env.production`、`.env.local` 和 `.env.*.local`，必须保留在本地。
+项目本身不提交任何密钥，包括 API Key、模型服务商 Key、OAuth Token、Cookie、浏览器配置、证书、私钥、本地数据库和生产配置。
 
 Vite 客户端变量是公开内容。不要把密钥写入 `VITE_*` 变量，因为它们可能被打包进前端产物。
 
 Tauri 桌面版会把模型服务商 API Key 保存到操作系统凭据库。浏览器回退模式只在 session storage 中临时保留模型 Key，并会清理历史 local storage 副本。
-
-## 本地数据边界
-
-不要发布以下内容：
-
-- `memory/`
-- `sample_project/`
-- `app_mvp_spec.md`
-- `app_implementation_plan.md`
-- `app/node_modules/`
-- `app/dist/`
-- `app/src-tauri/target/`
-- `app/qa-output/`
-- `app/.codex-logs/`
-- `app/.env`
-- 本地日志、浏览器配置、Release 二进制文件或生成缓存
 
 ## 如果密钥泄露
 
