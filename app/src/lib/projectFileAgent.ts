@@ -65,7 +65,19 @@ const maxPlanFiles = 6;
 const maxPlanOperations = 8;
 const maxReadRequests = 8;
 const maxWebSearchRequests = 4;
-const supportedDirectWriteExtensions = new Set(["md", "txt", "json", "csv", "tsv", "yml", "yaml", "mmd", "mermaid"]);
+const supportedDirectWriteExtensions = new Set([
+  "md",
+  "txt",
+  "json",
+  "csv",
+  "tsv",
+  "yml",
+  "yaml",
+  "mmd",
+  "mermaid",
+  "docx",
+  "xlsx",
+]);
 const supportedProjectReadExtensions = new Set([
   "md",
   "markdown",
@@ -84,6 +96,9 @@ const supportedProjectReadExtensions = new Set([
   "tsx",
   "mmd",
   "mermaid",
+  "docx",
+  "pdf",
+  "xlsx",
 ]);
 const protectedRootNames = new Set([
   ".git",
@@ -120,15 +135,23 @@ export function isProjectFileTaskIntent(input: string): boolean {
     /(放到|放在|保存到|写入到|输出到|存到|存入)/i.test(text) ||
     /(create|write|save|generate|draft).{0,32}(file|report|markdown|folder|directory)/i.test(text);
   const mentionsProjectFileTarget =
-    /(资料|素材|research|report|reports|竞品|调研|分析|\.md|markdown|文件夹|目录|文件|报告|文档)/i.test(text);
+    /(资料|素材|research|report|reports|竞品|调研|分析|\.md|\.docx|\.pdf|\.xlsx|markdown|docx|pdf|word|excel|xlsx|表格|文件夹|目录|文件|报告|文档)/i.test(text);
 
   const asksForProjectFileOperation =
     /(删除|移到|移动|挪到|重命名|改名|新建文件夹|创建文件夹|新建目录|创建目录|delete|remove|move|rename|mkdir|create directory)/i.test(text);
   const asksForProjectFileRead =
-    /(读取|查看|看一下|看看|分析|总结|概括|解释|提炼|检查|read|inspect|analyze|analyse|summarize|summarise).{0,48}(项目内|项目里的|项目文件|资料[\\/]|docs[\\/]|research[\\/]|reports[\\/]|\.md|markdown)/i.test(text) ||
+    /(读取|查看|看一下|看看|分析|总结|概括|解释|提炼|检查|read|inspect|analyze|analyse|summarize|summarise).{0,48}(项目内|项目里的|项目文件|资料[\\/]|docs[\\/]|research[\\/]|reports[\\/]|\.md|\.docx|\.pdf|\.xlsx|markdown|docx|pdf|word|excel|xlsx|表格)/i.test(text) ||
     /(项目内|项目里的|项目文件).{0,48}(读取|查看|看一下|看看|分析|总结|概括|解释|提炼|检查|read|inspect|analyze|analyse|summarize|summarise)/i.test(text);
+  const asksForExistingProjectHandoff =
+    /(已有|现有|当前|做到一半|进行中).{0,48}(案子|方案|策划案|项目|材料|文档).{0,64}(读取|分析|整理|建档|接管|工作流状态|进度|更新)/i.test(text) ||
+    /(读取|分析|整理|总结).{0,64}(已有|现有|当前|做到一半|进行中).{0,48}(案子|方案|策划案|项目|材料|文档).{0,64}(建档|接管|工作流状态|进度|更新)/i.test(text);
 
-  return (asksForFileOutput && mentionsProjectFileTarget) || asksForProjectFileOperation || asksForProjectFileRead;
+  return (
+    (asksForFileOutput && mentionsProjectFileTarget) ||
+    asksForProjectFileOperation ||
+    asksForProjectFileRead ||
+    asksForExistingProjectHandoff
+  );
 }
 
 export function projectFileTaskMentionsOnlineSearch(input: string): boolean {
@@ -210,19 +233,28 @@ export function buildProjectFileTaskMessages(input: ProjectFileTaskMessageInput)
         "- 日常资料默认优先写到 `资料/`；如果用户明确指定英文目录，可用 `research/` 或用户指定目录。",
         "- 不要把普通资料写入 `nodora/`、`context/`、`workflow_state.md`、主策划案、评审、岗位转译文档或记忆文件。",
         "- 如果用户明确要求修改上述保护区，可以返回目标文件，但必须把 mode 写成 `append` 或 `overwrite`，前端会二次确认。",
-        "- 可直接写入的文件类型仅限 `.md`、`.txt`、`.json`、`.csv`、`.tsv`、`.yml`、`.yaml`、`.mmd`、`.mermaid`。",
+        "- 可直接写入的文件类型仅限 `.md`、`.txt`、`.json`、`.csv`、`.tsv`、`.yml`、`.yaml`、`.mmd`、`.mermaid`、`.docx`、`.xlsx`。",
         "- 如果 path 使用 `.json/.csv/.tsv/.yml/.yaml/.mmd/.mermaid`，content 必须是对应格式原文，不要包 Markdown 标题或代码围栏。",
-        "- 不要直接写入源码文件、HTML、可执行文件、压缩包、图片、音频、视频或 Office 文档。",
+        "- 如果 path 使用 `.docx`，content 必须是 Markdown 正文；前端会通过桌面后端生成真正的 Word 文件。",
+        "- 如果 path 使用 `.xlsx`，content 必须是 CSV/TSV、Markdown 表格，或多个 `# Sheet: 工作表名` / `# 工作表：工作表名` 分段；每个分段下面放一张表，前端会通过桌面后端生成真正的 Excel 工作簿。",
+        "- 不要直接写入源码文件、HTML、可执行文件、压缩包、图片、音频、视频或除 `.docx/.xlsx` 以外的 Office 文档。",
         "- 视觉资产只能写“需要什么类型的图片/示意图”的占位说明，不要生成图片路径或声称已生成图片。",
         "",
         "## 读取项目文件",
         "- 如果仅凭当前上下文不足以完成任务，可以先返回 `readRequests`，并让 `files` 为空。",
-        "- `readRequests[].path` 可以是项目内文件或目录；前端会读取允许的文本文件后再次请求你生成最终计划。",
+        "- `readRequests[].path` 可以是项目内文件或目录；前端会读取允许的文本文件，桌面版也会抽取 `.docx`、`.pdf` 正文和 `.xlsx` 表格内容后再次请求你生成最终计划。",
         "- 如果请求读取目录，前端会先返回目录摘要和候选文件清单，再读取部分受支持文本文件正文；你可以根据目录摘要继续请求更具体的文件路径。",
         "- 不要请求绝对路径、隐藏目录、node_modules、dist、target 或项目外路径。",
         "- 已经提供在“补充读取的项目文件”里的内容，不要重复请求。",
         "- 如果用户只要求读取、总结、分析或解释项目内文件，而没有要求写入项目文件，应在读取足够上下文后让 `files` 和 `operations` 保持为空，并在 `answer` 输出给用户看的完整回答。",
         "- `answer` 可以使用 Markdown；但不要把它放进 `files[].content`，除非用户明确要求保存成文件。",
+        "",
+        "## 已有案子接管",
+        "- 如果用户把已有策划案、会议纪要、需求表或排期表放进项目，并明确要求“建档”“接管进度”或“更新工作流状态”，应先通过 `readRequests` 读取相关文件，不要凭空生成背景或阶段判断。",
+        "- 读取后可以基于文件证据生成 `nodora/context/project_context.md` 或 `context/project_context.md` 的写入预览；只有用户明确要求更新流程状态时，才生成 `nodora/workflow_state.md` 或 `workflow_state.md` 的写入预览。",
+        "- 写入 `context/`、`workflow_state.md`、主策划案或其他保护区时，必须使用 `append` 或 `overwrite`，并在 `reason` 里说明依据哪些已有文件；前端会要求用户二次确认。",
+        "- 不能仅凭材料出现过某阶段内容就把阶段标记为完成；只有文件证据足够明确时才写“已完成”或“当前阶段”，否则写“待确认”。",
+        "- 对来源不明、互相矛盾或证据不足的信息，应写成“待确认”或“AI 推断，需确认”，并在 `answer` 或目标文件内容中列出需要用户确认的问题。",
         "",
         "## 联网检索",
         onlineSearchRule,

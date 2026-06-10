@@ -1,11 +1,17 @@
 use keyring::Entry;
+use quick_xml::{
+    escape::unescape,
+    events::{BytesStart, Event},
+    Reader,
+};
 use reqwest::header::{ACCEPT, CONTENT_TYPE, USER_AGENT};
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::HashMap,
     env,
     ffi::c_void,
     fs,
-    io,
+    io::{self, Cursor, Read, Write},
     path::{Component, Path, PathBuf},
     process::{Command, Stdio},
     slice,
@@ -13,6 +19,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tauri::{AppHandle, Manager};
+use zip::ZipArchive;
 
 #[cfg(target_os = "windows")]
 use windows::{
@@ -115,6 +122,14 @@ struct LocalTextFileRequest {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct LocalTextFileWriteRequest {
+    project_root: String,
+    relative_path: String,
+    content: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LocalGeneratedDocumentWriteRequest {
     project_root: String,
     relative_path: String,
     content: String,
@@ -278,7 +293,7 @@ fn get_desktop_backend_status() -> DesktopBackendStatus {
                 id: "local-file-bridge".to_string(),
                 label: "Enhanced local file bridge".to_string(),
                 state: CapabilityState::Ready,
-                description: "Reads directory trees, UTF-8 text files, preview documents, and image assets inside a selected project root."
+                description: "Reads directory trees, UTF-8 text files, extracted DOCX/PDF text, preview documents, and image assets inside a selected project root."
                     .to_string(),
             },
             DesktopCapability {
@@ -308,6 +323,7 @@ fn get_desktop_backend_status() -> DesktopBackendStatus {
             "Web search returns source metadata and bounded page evidence excerpts for AI research context; it does not grant shell or file-system access."
                 .to_string(),
             "Local binary reads support small PDF, Word, and image preview files.".to_string(),
+            "Local AI context extraction supports UTF-8 text, DOCX text, and embedded PDF text inside the selected project root.".to_string(),
             "Desktop PDF export uses the selected project root for temporary files and removes them after rendering."
                 .to_string(),
             "Reserved commands return explicit not-implemented errors until their execution backends are added."
@@ -1241,6 +1257,14 @@ async fn read_local_text_file(request: LocalTextFileRequest) -> Result<LocalText
 }
 
 #[tauri::command]
+async fn read_local_document_text_file(request: LocalTextFileRequest) -> Result<LocalTextFileSnapshot, String> {
+    let root = canonicalize_project_root(&request.project_root)?;
+    let target = resolve_existing_project_file(&root, &request.relative_path)?;
+    ensure_supported_document_text_path(&target)?;
+    read_document_text_snapshot(&target)
+}
+
+#[tauri::command]
 async fn read_local_binary_file(
     request: LocalTextFileRequest,
 ) -> Result<LocalBinaryFileSnapshot, String> {
@@ -1261,6 +1285,33 @@ async fn write_local_text_file(
     fs::write(&target, request.content.as_bytes())
         .map_err(|error| format!("Failed to write local text file: {error}"))?;
     read_text_file_snapshot(&target)
+}
+
+#[tauri::command]
+async fn write_local_generated_document_file(
+    request: LocalGeneratedDocumentWriteRequest,
+) -> Result<LocalBinaryFileSnapshot, String> {
+    const MAX_GENERATED_DOCUMENT_SOURCE_BYTES: usize = 20 * 1024 * 1024;
+
+    if request.content.len() > MAX_GENERATED_DOCUMENT_SOURCE_BYTES {
+        return Err("Generated document source is larger than the 20 MB limit.".to_string());
+    }
+
+    let root = canonicalize_project_root(&request.project_root)?;
+    let target = resolve_writable_project_file(&root, &request.relative_path)?;
+    let extension = ensure_supported_generated_document_write_path(&target)?;
+    let (bytes, mime_type) = match extension.as_str() {
+        "docx" => (
+            docx_export::build_docx_from_html(&request.content)?,
+            docx_export::docx_mime_type().to_string(),
+        ),
+        "xlsx" => (build_xlsx_from_text(&request.content)?, xlsx_mime_type().to_string()),
+        _ => return Err("Unsupported generated document format.".to_string()),
+    };
+
+    fs::write(&target, bytes)
+        .map_err(|error| format!("Failed to write generated document file: {error}"))?;
+    read_binary_file_snapshot(&target, mime_type)
 }
 
 #[tauri::command]
@@ -1642,13 +1693,41 @@ fn join_relative_path(directory_path: &str, name: &str) -> String {
 }
 
 fn ensure_supported_text_path(path: &Path) -> Result<(), String> {
-    let extension = path
-        .extension()
+    if is_supported_text_extension(&file_extension_lower(path)) {
+        Ok(())
+    } else {
+        Err("Only UTF-8 text project files are supported by the local file bridge.".to_string())
+    }
+}
+
+fn ensure_supported_document_text_path(path: &Path) -> Result<(), String> {
+    let extension = file_extension_lower(path);
+    if is_supported_text_extension(&extension) || matches!(extension.as_str(), "docx" | "pdf" | "xlsx") {
+        Ok(())
+    } else {
+        Err("Only UTF-8 text, DOCX, PDF, and XLSX project files can be extracted as AI context.".to_string())
+    }
+}
+
+fn ensure_supported_generated_document_write_path(path: &Path) -> Result<String, String> {
+    let extension = file_extension_lower(path);
+    if matches!(extension.as_str(), "docx" | "xlsx") {
+        Ok(extension)
+    } else {
+        Err("Generated project documents can only be written as .docx or .xlsx files.".to_string())
+    }
+}
+
+fn file_extension_lower(path: &Path) -> String {
+    path.extension()
         .and_then(|value| value.to_str())
         .unwrap_or("")
-        .to_ascii_lowercase();
-    let supported = matches!(
-        extension.as_str(),
+        .to_ascii_lowercase()
+}
+
+fn is_supported_text_extension(extension: &str) -> bool {
+    matches!(
+        extension,
         "md"
             | "markdown"
             | "txt"
@@ -1666,13 +1745,7 @@ fn ensure_supported_text_path(path: &Path) -> Result<(), String> {
             | "tsx"
             | "mmd"
             | "mermaid"
-    );
-
-    if supported {
-        Ok(())
-    } else {
-        Err("Only UTF-8 text project files are supported by the local file bridge.".to_string())
-    }
+    )
 }
 
 fn read_text_file_snapshot(path: &Path) -> Result<LocalTextFileSnapshot, String> {
@@ -1686,6 +1759,985 @@ fn read_text_file_snapshot(path: &Path) -> Result<LocalTextFileSnapshot, String>
         last_modified: metadata_modified_millis(&metadata),
         size: metadata.len(),
     })
+}
+
+fn read_document_text_snapshot(path: &Path) -> Result<LocalTextFileSnapshot, String> {
+    const MAX_DOCUMENT_SOURCE_BYTES: u64 = 25 * 1024 * 1024;
+
+    let metadata = fs::metadata(path)
+        .map_err(|error| format!("Failed to read local document metadata: {error}"))?;
+    if metadata.len() > MAX_DOCUMENT_SOURCE_BYTES {
+        return Err("Local document is larger than the 25 MB text extraction limit.".to_string());
+    }
+
+    let extension = file_extension_lower(path);
+    let content = if is_supported_text_extension(&extension) {
+        fs::read_to_string(path)
+            .map_err(|error| format!("Failed to read local text file as UTF-8: {error}"))?
+    } else {
+        let extracted = match extension.as_str() {
+            "docx" => extract_docx_text(path),
+            "pdf" => extract_pdf_text(path),
+            "xlsx" => extract_xlsx_text(path),
+            _ => Err("Unsupported document text extraction format.".to_string()),
+        }?;
+        clean_extracted_document_text(&extracted)
+    };
+
+    Ok(LocalTextFileSnapshot {
+        content,
+        last_modified: metadata_modified_millis(&metadata),
+        size: metadata.len(),
+    })
+}
+
+fn extract_docx_text(path: &Path) -> Result<String, String> {
+    let file = fs::File::open(path).map_err(|error| format!("Failed to open DOCX file: {error}"))?;
+    let mut archive = ZipArchive::new(file).map_err(|error| format!("Failed to read DOCX package: {error}"))?;
+    let mut document_xml = String::new();
+    archive
+        .by_name("word/document.xml")
+        .map_err(|error| format!("Failed to find DOCX document body: {error}"))?
+        .read_to_string(&mut document_xml)
+        .map_err(|error| format!("Failed to read DOCX document body: {error}"))?;
+
+    extract_docx_document_xml_text(&document_xml)
+}
+
+fn extract_docx_document_xml_text(document_xml: &str) -> Result<String, String> {
+    let mut reader = Reader::from_str(document_xml);
+    reader.config_mut().trim_text(false);
+    let mut text = String::new();
+    let mut in_text_run = false;
+
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(event)) => match event.local_name().as_ref() {
+                b"t" => in_text_run = true,
+                b"p" => push_newline_if_needed(&mut text),
+                _ => {}
+            },
+            Ok(Event::End(event)) => match event.local_name().as_ref() {
+                b"t" => in_text_run = false,
+                b"p" => push_newline_if_needed(&mut text),
+                _ => {}
+            },
+            Ok(Event::Empty(event)) => match event.local_name().as_ref() {
+                b"tab" => text.push('\t'),
+                b"br" | b"cr" => push_newline_if_needed(&mut text),
+                _ => {}
+            },
+            Ok(Event::Text(event)) if in_text_run => {
+                let decoded = event
+                    .decode()
+                    .map_err(|error| format!("Failed to decode DOCX text: {error}"))?;
+                if xml_text_needs_unescape(&decoded) {
+                    let unescaped = unescape(&decoded)
+                        .map_err(|error| format!("Failed to unescape DOCX text: {error}"))?;
+                    text.push_str(&unescaped);
+                } else {
+                    text.push_str(&decoded);
+                }
+            }
+            Ok(Event::GeneralRef(event)) if in_text_run => {
+                text.push_str(&decode_xml_general_ref(&event)?);
+            }
+            Ok(Event::Eof) => break,
+            Ok(_) => {}
+            Err(error) => return Err(format!("Failed to parse DOCX XML: {error}")),
+        }
+    }
+
+    Ok(text)
+}
+
+fn decode_xml_general_ref(event: &quick_xml::events::BytesRef<'_>) -> Result<String, String> {
+    if let Some(character) = event
+        .resolve_char_ref()
+        .map_err(|error| format!("Failed to decode DOCX character reference: {error}"))?
+    {
+        return Ok(character.to_string());
+    }
+
+    let name = event
+        .decode()
+        .map_err(|error| format!("Failed to decode DOCX entity reference: {error}"))?;
+    let value = match name.as_ref() {
+        "amp" => "&",
+        "lt" => "<",
+        "gt" => ">",
+        "quot" => "\"",
+        "apos" => "'",
+        other => return Ok(format!("&{other};")),
+    };
+
+    Ok(value.to_string())
+}
+
+fn xml_text_needs_unescape(value: &str) -> bool {
+    value.contains("&amp;")
+        || value.contains("&lt;")
+        || value.contains("&gt;")
+        || value.contains("&quot;")
+        || value.contains("&apos;")
+        || value.contains("&#")
+}
+
+fn extract_pdf_text(path: &Path) -> Result<String, String> {
+    pdf_extract::extract_text(path).map_err(|error| format!("Failed to extract PDF text: {error}"))
+}
+
+const XLSX_MIME_TYPE: &str = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+
+fn xlsx_mime_type() -> &'static str {
+    XLSX_MIME_TYPE
+}
+
+fn build_xlsx_from_text(content: &str) -> Result<Vec<u8>, String> {
+    let sheets = parse_spreadsheet_sheets(content);
+    if sheets.is_empty() {
+        return Err("Excel content must include at least one non-empty row.".to_string());
+    }
+
+    let cursor = Cursor::new(Vec::<u8>::new());
+    let mut writer = zip::ZipWriter::new(cursor);
+    let options = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Stored);
+
+    write_zip_text_entry(
+        &mut writer,
+        "[Content_Types].xml",
+        &build_xlsx_content_types_xml(sheets.len()),
+        options,
+    )?;
+    write_zip_text_entry(
+        &mut writer,
+        "_rels/.rels",
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/>
+  <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/>
+</Relationships>"#,
+        options,
+    )?;
+    write_zip_text_entry(
+        &mut writer,
+        "docProps/app.xml",
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">
+  <Application>Nodora</Application>
+</Properties>"#,
+        options,
+    )?;
+    write_zip_text_entry(
+        &mut writer,
+        "docProps/core.xml",
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:dcmitype="http://purl.org/dc/dcmitype/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <dc:creator>Nodora</dc:creator>
+  <cp:lastModifiedBy>Nodora</cp:lastModifiedBy>
+  <dcterms:created xsi:type="dcterms:W3CDTF">1970-01-01T00:00:00Z</dcterms:created>
+  <dcterms:modified xsi:type="dcterms:W3CDTF">1970-01-01T00:00:00Z</dcterms:modified>
+</cp:coreProperties>"#,
+        options,
+    )?;
+    write_zip_text_entry(&mut writer, "xl/workbook.xml", &build_xlsx_workbook_xml(&sheets), options)?;
+    write_zip_text_entry(
+        &mut writer,
+        "xl/_rels/workbook.xml.rels",
+        &build_xlsx_workbook_relationships_xml(sheets.len()),
+        options,
+    )?;
+    write_zip_text_entry(
+        &mut writer,
+        "xl/styles.xml",
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <fonts count="1"><font><sz val="11"/><name val="Microsoft YaHei"/></font></fonts>
+  <fills count="1"><fill><patternFill patternType="none"/></fill></fills>
+  <borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>
+  <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
+  <cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/></cellXfs>
+  <cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
+</styleSheet>"#,
+        options,
+    )?;
+    for (index, sheet) in sheets.iter().enumerate() {
+        write_zip_text_entry(
+            &mut writer,
+            &format!("xl/worksheets/sheet{}.xml", index + 1),
+            &build_xlsx_worksheet_xml(&sheet.rows),
+            options,
+        )?;
+    }
+
+    let cursor = writer
+        .finish()
+        .map_err(|error| format!("Failed to finish XLSX package: {error}"))?;
+    Ok(cursor.into_inner())
+}
+
+fn build_xlsx_content_types_xml(sheet_count: usize) -> String {
+    let mut xml = String::from(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>
+  <Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>
+  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
+"#,
+    );
+    for index in 1..=sheet_count {
+        xml.push_str(&format!(
+            r#"  <Override PartName="/xl/worksheets/sheet{index}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+"#,
+        ));
+    }
+    xml.push_str("</Types>");
+    xml
+}
+
+fn build_xlsx_workbook_xml(sheets: &[SpreadsheetSheet]) -> String {
+    let mut xml = String::from(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheets>
+"#,
+    );
+    for (index, sheet) in sheets.iter().enumerate() {
+        let sheet_id = index + 1;
+        xml.push_str(&format!(
+            r#"    <sheet name="{}" sheetId="{sheet_id}" r:id="rId{sheet_id}"/>
+"#,
+            escape_xml_attr(&sheet.name),
+        ));
+    }
+    xml.push_str("  </sheets>\n</workbook>");
+    xml
+}
+
+fn build_xlsx_workbook_relationships_xml(sheet_count: usize) -> String {
+    let mut xml = String::from(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+"#,
+    );
+    for index in 1..=sheet_count {
+        xml.push_str(&format!(
+            r#"  <Relationship Id="rId{index}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet{index}.xml"/>
+"#,
+        ));
+    }
+    xml.push_str(&format!(
+        r#"  <Relationship Id="rId{}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+</Relationships>"#,
+        sheet_count + 1,
+    ));
+    xml
+}
+
+fn write_zip_text_entry(
+    writer: &mut zip::ZipWriter<Cursor<Vec<u8>>>,
+    name: &str,
+    content: &str,
+    options: zip::write::SimpleFileOptions,
+) -> Result<(), String> {
+    writer
+        .start_file(name, options)
+        .map_err(|error| format!("Failed to start XLSX package entry {name}: {error}"))?;
+    writer
+        .write_all(content.as_bytes())
+        .map_err(|error| format!("Failed to write XLSX package entry {name}: {error}"))
+}
+
+struct SpreadsheetSheet {
+    name: String,
+    rows: Vec<Vec<String>>,
+}
+
+fn parse_spreadsheet_sheets(content: &str) -> Vec<SpreadsheetSheet> {
+    const MAX_SPREADSHEET_SHEETS: usize = 32;
+
+    let mut raw_sections: Vec<(String, String)> = Vec::new();
+    let mut current_name = "Sheet1".to_string();
+    let mut current_lines: Vec<String> = Vec::new();
+    let mut saw_sheet_marker = false;
+
+    for line in content.lines() {
+        if let Some(sheet_name) = parse_spreadsheet_sheet_heading(line) {
+            if !current_lines.iter().all(|entry| entry.trim().is_empty()) {
+                raw_sections.push((current_name, current_lines.join("\n")));
+            }
+            current_name = sheet_name;
+            current_lines.clear();
+            saw_sheet_marker = true;
+        } else if saw_sheet_marker || !line.trim().is_empty() {
+            current_lines.push(line.to_string());
+        }
+    }
+
+    if !current_lines.iter().all(|entry| entry.trim().is_empty()) {
+        raw_sections.push((current_name, current_lines.join("\n")));
+    }
+
+    let mut used_names = Vec::new();
+    raw_sections
+        .into_iter()
+        .take(MAX_SPREADSHEET_SHEETS)
+        .filter_map(|(name, section_content)| {
+            let rows = parse_spreadsheet_text(&section_content);
+            if rows.is_empty() {
+                return None;
+            }
+
+            let name = unique_excel_sheet_name(&name, &mut used_names);
+            Some(SpreadsheetSheet { name, rows })
+        })
+        .collect()
+}
+
+fn parse_spreadsheet_sheet_heading(line: &str) -> Option<String> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let heading = trimmed.trim_start_matches('#').trim();
+    let lower = heading.to_ascii_lowercase();
+    for prefix in ["sheet:", "sheet：", "worksheet:", "worksheet："] {
+        if lower.starts_with(prefix) {
+            return Some(heading[prefix.len()..].trim().to_string());
+        }
+    }
+
+    for prefix in ["工作表:", "工作表：", "表格:", "表格："] {
+        if heading.starts_with(prefix) {
+            return Some(heading[prefix.len()..].trim().to_string());
+        }
+    }
+
+    None
+}
+
+fn unique_excel_sheet_name(raw_name: &str, used_names: &mut Vec<String>) -> String {
+    let base = sanitize_excel_sheet_name(raw_name);
+    if !used_names.iter().any(|name| name.eq_ignore_ascii_case(&base)) {
+        used_names.push(base.clone());
+        return base;
+    }
+
+    for index in 2..1000 {
+        let suffix = format!(" {index}");
+        let max_base_chars = 31usize.saturating_sub(suffix.chars().count());
+        let candidate = format!("{}{}", truncate_chars(&base, max_base_chars, ""), suffix);
+        if !used_names.iter().any(|name| name.eq_ignore_ascii_case(&candidate)) {
+            used_names.push(candidate.clone());
+            return candidate;
+        }
+    }
+
+    let fallback = format!("Sheet{}", used_names.len() + 1);
+    used_names.push(fallback.clone());
+    fallback
+}
+
+fn sanitize_excel_sheet_name(raw_name: &str) -> String {
+    let cleaned = raw_name
+        .trim()
+        .trim_matches('\'')
+        .chars()
+        .map(|character| match character {
+            ':' | '\\' | '/' | '?' | '*' | '[' | ']' => ' ',
+            _ => character,
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let cleaned = truncate_chars(cleaned.trim(), 31, "");
+    if cleaned.is_empty() {
+        "Sheet1".to_string()
+    } else {
+        cleaned
+    }
+}
+
+fn parse_spreadsheet_text(content: &str) -> Vec<Vec<String>> {
+    const MAX_SPREADSHEET_ROWS: usize = 5000;
+    const MAX_SPREADSHEET_COLUMNS: usize = 128;
+    const MAX_CELL_CHARS: usize = 32767;
+
+    let non_empty_lines = content
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>();
+    if non_empty_lines.is_empty() {
+        return Vec::new();
+    }
+
+    let markdown_table_lines = non_empty_lines
+        .iter()
+        .copied()
+        .filter(|line| line.starts_with('|') && line.ends_with('|'))
+        .collect::<Vec<_>>();
+    let raw_rows = if markdown_table_lines.len() >= 2 {
+        markdown_table_lines
+            .into_iter()
+            .map(split_markdown_table_row)
+            .filter(|row| !is_markdown_table_separator_row(row))
+            .collect::<Vec<_>>()
+    } else {
+        let delimiter = if content.contains('\t') { '\t' } else { ',' };
+        non_empty_lines
+            .into_iter()
+            .map(|line| parse_delimited_row(line, delimiter))
+            .collect::<Vec<_>>()
+    };
+
+    raw_rows
+        .into_iter()
+        .take(MAX_SPREADSHEET_ROWS)
+        .filter_map(|row| {
+            let cells = row
+                .into_iter()
+                .take(MAX_SPREADSHEET_COLUMNS)
+                .map(|cell| truncate_chars(cell.trim(), MAX_CELL_CHARS, "..."))
+                .collect::<Vec<_>>();
+            if cells.iter().any(|cell| !cell.is_empty()) {
+                Some(cells)
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+fn split_markdown_table_row(line: &str) -> Vec<String> {
+    line.trim()
+        .trim_matches('|')
+        .split('|')
+        .map(|cell| cell.trim().to_string())
+        .collect()
+}
+
+fn is_markdown_table_separator_row(row: &[String]) -> bool {
+    !row.is_empty()
+        && row.iter().all(|cell| {
+            let clean = cell.trim().trim_matches(':');
+            clean.len() >= 3 && clean.chars().all(|character| character == '-')
+        })
+}
+
+fn parse_delimited_row(line: &str, delimiter: char) -> Vec<String> {
+    let mut cells = Vec::new();
+    let mut cell = String::new();
+    let mut chars = line.chars().peekable();
+    let mut quoted = false;
+
+    while let Some(character) = chars.next() {
+        if quoted {
+            if character == '"' {
+                if chars.peek() == Some(&'"') {
+                    cell.push('"');
+                    chars.next();
+                } else {
+                    quoted = false;
+                }
+            } else {
+                cell.push(character);
+            }
+            continue;
+        }
+
+        if character == '"' && cell.is_empty() {
+            quoted = true;
+        } else if character == delimiter {
+            cells.push(cell.trim().to_string());
+            cell.clear();
+        } else {
+            cell.push(character);
+        }
+    }
+
+    cells.push(cell.trim().to_string());
+    cells
+}
+
+fn build_xlsx_worksheet_xml(rows: &[Vec<String>]) -> String {
+    let max_columns = rows.iter().map(Vec::len).max().unwrap_or(1).max(1);
+    let dimension = format!(
+        "A1:{}{}",
+        spreadsheet_column_name(max_columns),
+        rows.len().max(1)
+    );
+    let mut xml = String::from(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#);
+    xml.push_str(r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">"#);
+    xml.push_str(&format!(r#"<dimension ref="{}"/>"#, escape_xml_attr(&dimension)));
+    xml.push_str(r#"<sheetViews><sheetView workbookViewId="0"/></sheetViews><sheetFormatPr defaultRowHeight="15"/><sheetData>"#);
+
+    for (row_index, row) in rows.iter().enumerate() {
+        let row_number = row_index + 1;
+        xml.push_str(&format!(r#"<row r="{row_number}">"#));
+        for (column_index, cell) in row.iter().enumerate() {
+            if cell.is_empty() {
+                continue;
+            }
+            let reference = format!("{}{}", spreadsheet_column_name(column_index + 1), row_number);
+            xml.push_str(&format!(
+                r#"<c r="{}" t="inlineStr"><is><t>{}</t></is></c>"#,
+                escape_xml_attr(&reference),
+                escape_xml_text(cell),
+            ));
+        }
+        xml.push_str("</row>");
+    }
+
+    xml.push_str(r#"</sheetData><pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/></worksheet>"#);
+    xml
+}
+
+fn spreadsheet_column_name(mut index: usize) -> String {
+    let mut name = String::new();
+    while index > 0 {
+        index -= 1;
+        name.insert(0, char::from(b'A' + (index % 26) as u8));
+        index /= 26;
+    }
+    name
+}
+
+fn extract_xlsx_text(path: &Path) -> Result<String, String> {
+    let file = fs::File::open(path).map_err(|error| format!("Failed to open XLSX file: {error}"))?;
+    let mut archive = ZipArchive::new(file).map_err(|error| format!("Failed to read XLSX package: {error}"))?;
+    let shared_strings = read_xlsx_shared_strings(&mut archive)?;
+    let sheets = xlsx_worksheet_refs(&mut archive)?;
+    if sheets.is_empty() {
+        return Err("XLSX workbook does not contain readable worksheets.".to_string());
+    }
+
+    let mut sections = Vec::new();
+    for sheet in sheets.iter().take(8) {
+        let xml = read_zip_entry_to_string(&mut archive, &sheet.path)?;
+        let rows = extract_xlsx_sheet_rows(&xml, &shared_strings)?;
+        if rows.is_empty() {
+            continue;
+        }
+
+        sections.push(format!(
+            "Sheet: {}\n{}",
+            sheet.name,
+            spreadsheet_rows_to_markdown(&rows)
+        ));
+    }
+
+    if sections.is_empty() {
+        Ok("No extractable spreadsheet cells were found.".to_string())
+    } else {
+        Ok(sections.join("\n\n---\n\n"))
+    }
+}
+
+fn read_xlsx_shared_strings(archive: &mut ZipArchive<fs::File>) -> Result<Vec<String>, String> {
+    let xml = match read_zip_entry_to_string(archive, "xl/sharedStrings.xml") {
+        Ok(value) => value,
+        Err(_) => return Ok(Vec::new()),
+    };
+
+    let mut reader = Reader::from_str(&xml);
+    reader.config_mut().trim_text(false);
+    let mut strings = Vec::new();
+    let mut current = String::new();
+    let mut in_shared_item = false;
+    let mut in_text = false;
+
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(event)) => match event.local_name().as_ref() {
+                b"si" => {
+                    in_shared_item = true;
+                    current.clear();
+                }
+                b"t" if in_shared_item => in_text = true,
+                _ => {}
+            },
+            Ok(Event::End(event)) => match event.local_name().as_ref() {
+                b"si" => {
+                    strings.push(current.clone());
+                    current.clear();
+                    in_shared_item = false;
+                }
+                b"t" => in_text = false,
+                _ => {}
+            },
+            Ok(Event::Text(event)) if in_text => push_decoded_xml_text(&mut current, &event)?,
+            Ok(Event::GeneralRef(event)) if in_text => current.push_str(&decode_xml_general_ref(&event)?),
+            Ok(Event::Eof) => break,
+            Ok(_) => {}
+            Err(error) => return Err(format!("Failed to parse XLSX shared strings: {error}")),
+        }
+    }
+
+    Ok(strings)
+}
+
+struct XlsxWorksheetRef {
+    name: String,
+    path: String,
+}
+
+fn xlsx_worksheet_refs(archive: &mut ZipArchive<fs::File>) -> Result<Vec<XlsxWorksheetRef>, String> {
+    match read_xlsx_workbook_sheet_refs(archive) {
+        Ok(refs) if !refs.is_empty() => Ok(refs),
+        _ => xlsx_worksheet_entry_names(archive).map(|names| {
+            names
+                .into_iter()
+                .enumerate()
+                .map(|(index, path)| XlsxWorksheetRef {
+                    name: format!("Sheet{}", index + 1),
+                    path,
+                })
+                .collect()
+        }),
+    }
+}
+
+fn read_xlsx_workbook_sheet_refs(archive: &mut ZipArchive<fs::File>) -> Result<Vec<XlsxWorksheetRef>, String> {
+    let workbook_xml = read_zip_entry_to_string(archive, "xl/workbook.xml")?;
+    let relationships_xml = read_zip_entry_to_string(archive, "xl/_rels/workbook.xml.rels")?;
+    let relationships = parse_xlsx_workbook_relationships(&relationships_xml)?;
+
+    let mut reader = Reader::from_str(&workbook_xml);
+    reader.config_mut().trim_text(false);
+    let mut refs = Vec::new();
+
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(event)) | Ok(Event::Empty(event)) if event.local_name().as_ref() == b"sheet" => {
+                let name = xml_attr_value(&event, b"name").unwrap_or_else(|| format!("Sheet{}", refs.len() + 1));
+                let relationship_id = xml_attr_value(&event, b"r:id").or_else(|| xml_attr_value(&event, b"id"));
+                if let Some(path) = relationship_id
+                    .as_deref()
+                    .and_then(|id| relationships.get(id))
+                    .map(|target| normalize_xlsx_relationship_target("xl", target))
+                {
+                    refs.push(XlsxWorksheetRef { name, path });
+                }
+            }
+            Ok(Event::Eof) => break,
+            Ok(_) => {}
+            Err(error) => return Err(format!("Failed to parse XLSX workbook sheets: {error}")),
+        }
+    }
+
+    Ok(refs)
+}
+
+fn parse_xlsx_workbook_relationships(xml: &str) -> Result<HashMap<String, String>, String> {
+    let mut reader = Reader::from_str(xml);
+    reader.config_mut().trim_text(false);
+    let mut relationships = HashMap::new();
+
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(event)) | Ok(Event::Empty(event))
+                if event.local_name().as_ref() == b"Relationship" =>
+            {
+                if let (Some(id), Some(target)) = (xml_attr_value(&event, b"Id"), xml_attr_value(&event, b"Target")) {
+                    relationships.insert(id, target);
+                }
+            }
+            Ok(Event::Eof) => break,
+            Ok(_) => {}
+            Err(error) => return Err(format!("Failed to parse XLSX workbook relationships: {error}")),
+        }
+    }
+
+    Ok(relationships)
+}
+
+fn normalize_xlsx_relationship_target(base_directory: &str, target: &str) -> String {
+    let clean = target.replace('\\', "/").trim_start_matches('/').to_string();
+    if clean.starts_with("xl/") {
+        clean
+    } else {
+        format!("{}/{}", base_directory.trim_matches('/'), clean)
+    }
+}
+
+fn xlsx_worksheet_entry_names(archive: &mut ZipArchive<fs::File>) -> Result<Vec<String>, String> {
+    let mut names = Vec::new();
+    for index in 0..archive.len() {
+        let file = archive
+            .by_index(index)
+            .map_err(|error| format!("Failed to inspect XLSX package entry: {error}"))?;
+        let name = file.name().to_string();
+        if name.starts_with("xl/worksheets/sheet") && name.ends_with(".xml") {
+            names.push(name);
+        }
+    }
+    names.sort_by_key(|name| worksheet_sort_key(name));
+    Ok(names)
+}
+
+fn worksheet_sort_key(name: &str) -> usize {
+    name.trim_start_matches("xl/worksheets/sheet")
+        .trim_end_matches(".xml")
+        .parse::<usize>()
+        .unwrap_or(usize::MAX)
+}
+
+fn read_zip_entry_to_string(archive: &mut ZipArchive<fs::File>, name: &str) -> Result<String, String> {
+    let mut content = String::new();
+    archive
+        .by_name(name)
+        .map_err(|error| format!("Failed to find XLSX package entry {name}: {error}"))?
+        .read_to_string(&mut content)
+        .map_err(|error| format!("Failed to read XLSX package entry {name}: {error}"))?;
+    Ok(content)
+}
+
+fn extract_xlsx_sheet_rows(xml: &str, shared_strings: &[String]) -> Result<Vec<Vec<String>>, String> {
+    let mut reader = Reader::from_str(xml);
+    reader.config_mut().trim_text(false);
+    let mut rows: Vec<Vec<String>> = Vec::new();
+    let mut current_row: Option<Vec<String>> = None;
+    let mut current_cell: Option<XlsxCellState> = None;
+    let mut reading_value = false;
+    let mut reading_inline_text = false;
+
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(event)) => match event.local_name().as_ref() {
+                b"row" => current_row = Some(Vec::new()),
+                b"c" => current_cell = Some(XlsxCellState::from_cell_start(&event)),
+                b"v" if current_cell.is_some() => reading_value = true,
+                b"t" if current_cell.is_some() => reading_inline_text = true,
+                _ => {}
+            },
+            Ok(Event::End(event)) => match event.local_name().as_ref() {
+                b"row" => {
+                    if let Some(mut row) = current_row.take() {
+                        trim_trailing_empty_cells(&mut row);
+                        if row.iter().any(|cell| !cell.is_empty()) {
+                            rows.push(row);
+                        }
+                    }
+                }
+                b"c" => {
+                    if let Some(cell) = current_cell.take() {
+                        let column_index = cell.column_index;
+                        let value = cell.resolve(shared_strings);
+                        if !value.is_empty() {
+                            let row = current_row.get_or_insert_with(Vec::new);
+                            let column = column_index.unwrap_or(row.len());
+                            if row.len() <= column {
+                                row.resize(column + 1, String::new());
+                            }
+                            row[column] = value;
+                        }
+                    }
+                    reading_value = false;
+                    reading_inline_text = false;
+                }
+                b"v" => reading_value = false,
+                b"t" => reading_inline_text = false,
+                _ => {}
+            },
+            Ok(Event::Text(event)) if reading_value || reading_inline_text => {
+                if let Some(cell) = current_cell.as_mut() {
+                    push_decoded_xml_text(&mut cell.value, &event)?;
+                }
+            }
+            Ok(Event::GeneralRef(event)) if reading_value || reading_inline_text => {
+                if let Some(cell) = current_cell.as_mut() {
+                    cell.value.push_str(&decode_xml_general_ref(&event)?);
+                }
+            }
+            Ok(Event::Eof) => break,
+            Ok(_) => {}
+            Err(error) => return Err(format!("Failed to parse XLSX worksheet: {error}")),
+        }
+    }
+
+    Ok(rows)
+}
+
+#[derive(Default)]
+struct XlsxCellState {
+    cell_type: String,
+    column_index: Option<usize>,
+    value: String,
+}
+
+impl XlsxCellState {
+    fn from_cell_start(event: &BytesStart<'_>) -> Self {
+        let reference = xml_attr_value(event, b"r");
+        Self {
+            cell_type: xml_attr_value(event, b"t").unwrap_or_default(),
+            column_index: reference.as_deref().and_then(spreadsheet_column_index_from_reference),
+            value: String::new(),
+        }
+    }
+
+    fn resolve(self, shared_strings: &[String]) -> String {
+        let value = self.value.trim().to_string();
+        match self.cell_type.as_str() {
+            "s" => value
+                .parse::<usize>()
+                .ok()
+                .and_then(|index| shared_strings.get(index).cloned())
+                .unwrap_or(value),
+            "b" => match value.as_str() {
+                "1" => "TRUE".to_string(),
+                "0" => "FALSE".to_string(),
+                _ => value,
+            },
+            _ => value,
+        }
+    }
+}
+
+fn xml_attr_value(event: &BytesStart<'_>, key: &[u8]) -> Option<String> {
+    event
+        .attributes()
+        .with_checks(false)
+        .filter_map(Result::ok)
+        .find(|attribute| attribute.key.as_ref() == key)
+        .and_then(|attribute| attribute.unescape_value().ok().map(|value| value.into_owned()))
+}
+
+fn spreadsheet_column_index_from_reference(reference: &str) -> Option<usize> {
+    let mut index = 0usize;
+    let mut has_column = false;
+    for character in reference.chars() {
+        if !character.is_ascii_alphabetic() {
+            break;
+        }
+        has_column = true;
+        index = index * 26 + (character.to_ascii_uppercase() as usize - 'A' as usize + 1);
+    }
+    has_column.then_some(index.saturating_sub(1))
+}
+
+fn push_decoded_xml_text(output: &mut String, event: &quick_xml::events::BytesText<'_>) -> Result<(), String> {
+    let decoded = event
+        .decode()
+        .map_err(|error| format!("Failed to decode XML text: {error}"))?;
+    if xml_text_needs_unescape(&decoded) {
+        let unescaped = unescape(&decoded)
+            .map_err(|error| format!("Failed to unescape XML text: {error}"))?;
+        output.push_str(&unescaped);
+    } else {
+        output.push_str(&decoded);
+    }
+    Ok(())
+}
+
+fn trim_trailing_empty_cells(row: &mut Vec<String>) {
+    while row.last().is_some_and(|cell| cell.is_empty()) {
+        row.pop();
+    }
+}
+
+fn spreadsheet_rows_to_markdown(rows: &[Vec<String>]) -> String {
+    let column_count = rows.iter().map(Vec::len).max().unwrap_or(1).max(1);
+    let mut lines = Vec::new();
+    let first_row = rows.first().cloned().unwrap_or_default();
+    lines.push(markdown_table_row(&first_row, column_count));
+    lines.push(markdown_table_separator(column_count));
+    for row in rows.iter().skip(1).take(199) {
+        lines.push(markdown_table_row(row, column_count));
+    }
+    if rows.len() > 200 {
+        lines.push(markdown_table_row(&[format!("...({} more rows)", rows.len() - 200)], column_count));
+    }
+    lines.join("\n")
+}
+
+fn markdown_table_row(row: &[String], column_count: usize) -> String {
+    let cells = (0..column_count)
+        .map(|index| markdown_table_cell(row.get(index).map(String::as_str).unwrap_or("")))
+        .collect::<Vec<_>>();
+    format!("| {} |", cells.join(" | "))
+}
+
+fn markdown_table_separator(column_count: usize) -> String {
+    let cells = std::iter::repeat("---")
+        .take(column_count)
+        .collect::<Vec<_>>();
+    format!("| {} |", cells.join(" | "))
+}
+
+fn markdown_table_cell(value: &str) -> String {
+    value.replace('|', "\\|").replace('\n', " ")
+}
+
+fn escape_xml_text(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+fn escape_xml_attr(value: &str) -> String {
+    escape_xml_text(value)
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
+}
+
+fn clean_extracted_document_text(content: &str) -> String {
+    const MAX_EXTRACTED_DOCUMENT_TEXT_CHARS: usize = 200_000;
+
+    let normalized = content.replace("\r\n", "\n").replace('\r', "\n");
+    let mut cleaned_lines = Vec::new();
+    let mut previous_blank = false;
+
+    for line in normalized.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            if !previous_blank {
+                cleaned_lines.push(String::new());
+            }
+            previous_blank = true;
+            continue;
+        }
+
+        cleaned_lines.push(trimmed.to_string());
+        previous_blank = false;
+    }
+
+    let cleaned = cleaned_lines.join("\n").trim().to_string();
+    let output = if cleaned.is_empty() {
+        "No extractable text was found. The document may be scanned, empty, protected, or image-only.".to_string()
+    } else {
+        cleaned
+    };
+
+    truncate_chars(
+        &output,
+        MAX_EXTRACTED_DOCUMENT_TEXT_CHARS,
+        "\n\n...(document text extraction truncated)",
+    )
+}
+
+fn push_newline_if_needed(text: &mut String) {
+    if !text.is_empty() && !text.ends_with('\n') {
+        text.push('\n');
+    }
+}
+
+fn truncate_chars(content: &str, max_chars: usize, marker: &str) -> String {
+    if content.chars().count() <= max_chars {
+        return content.to_string();
+    }
+
+    let mut output = content.chars().take(max_chars).collect::<String>();
+    output.push_str(marker);
+    output
 }
 
 fn supported_binary_mime_type(path: &Path) -> Result<String, String> {
@@ -2302,7 +3354,10 @@ fn prefix_project_path(prefix: &str, path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::{
+        io::Write,
+        time::{SystemTime, UNIX_EPOCH},
+    };
 
     #[cfg(target_os = "windows")]
     #[test]
@@ -2415,6 +3470,84 @@ mod tests {
         assert_eq!(snapshot.content, "# Brief\n\nContent");
         assert_eq!(snapshot.size, 16);
         assert!(snapshot.last_modified > 0);
+        cleanup_test_root(&root);
+    }
+
+    #[test]
+    fn docx_document_xml_extracts_paragraph_text() {
+        let xml = r#"
+            <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+              <w:body>
+                <w:p><w:r><w:t>Alpha &amp; Beta</w:t></w:r></w:p>
+                <w:p><w:r><w:t>Second</w:t><w:tab/><w:t>line</w:t></w:r></w:p>
+              </w:body>
+            </w:document>
+        "#;
+
+        let text = clean_extracted_document_text(
+            &extract_docx_document_xml_text(xml).expect("extract docx XML text"),
+        );
+
+        assert_eq!(text, "Alpha & Beta\nSecond\tline");
+    }
+
+    #[test]
+    fn local_document_text_snapshot_extracts_docx_context() {
+        let root = create_test_root("docx-text-snapshot");
+        let docs = root.join("docs");
+        fs::create_dir_all(&docs).expect("create docs directory");
+        let docx_path = docs.join("brief.docx");
+        write_minimal_docx(
+            &docx_path,
+            r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>Project brief</w:t></w:r></w:p><w:p><w:r><w:t>Key point</w:t></w:r></w:p></w:body></w:document>"#,
+        );
+
+        let file = resolve_existing_project_file(&root, "docs/brief.docx").expect("resolve docx file");
+        let snapshot = read_document_text_snapshot(&file).expect("extract docx text snapshot");
+
+        assert_eq!(snapshot.content, "Project brief\nKey point");
+        assert!(snapshot.size > 0);
+        assert!(snapshot.last_modified > 0);
+        cleanup_test_root(&root);
+    }
+
+    #[test]
+    fn document_text_support_accepts_docx_and_pdf_but_not_legacy_doc() {
+        assert!(ensure_supported_document_text_path(Path::new("brief.docx")).is_ok());
+        assert!(ensure_supported_document_text_path(Path::new("brief.pdf")).is_ok());
+        assert!(ensure_supported_document_text_path(Path::new("brief.xlsx")).is_ok());
+        assert!(ensure_supported_document_text_path(Path::new("brief.md")).is_ok());
+        assert!(ensure_supported_document_text_path(Path::new("brief.doc")).is_err());
+    }
+
+    #[test]
+    fn generated_xlsx_round_trip_extracts_multiple_sheets() {
+        let root = create_test_root("xlsx-multi-sheet");
+        let docs = root.join("docs");
+        fs::create_dir_all(&docs).expect("create docs directory");
+        let workbook_path = docs.join("analysis.xlsx");
+        let bytes = build_xlsx_from_text(
+            r#"# Sheet: 竞品列表
+| 名称 | 分数 |
+| --- | --- |
+| Alpha | 90 |
+
+# 工作表：成本估算
+项目,金额
+服务器,100
+"#,
+        )
+        .expect("build xlsx");
+        fs::write(&workbook_path, bytes).expect("write xlsx");
+
+        let text = extract_xlsx_text(&workbook_path).expect("extract xlsx text");
+
+        assert!(text.contains("Sheet: 竞品列表"));
+        assert!(text.contains("| 名称 | 分数 |"));
+        assert!(text.contains("| Alpha | 90 |"));
+        assert!(text.contains("Sheet: 成本估算"));
+        assert!(text.contains("| 项目 | 金额 |"));
+        assert!(text.contains("| 服务器 | 100 |"));
         cleanup_test_root(&root);
     }
 
@@ -2630,6 +3763,20 @@ mod tests {
     fn cleanup_test_root(root: &Path) {
         fs::remove_dir_all(root).expect("remove test root");
     }
+
+    fn write_minimal_docx(path: &Path, document_xml: &str) {
+        let file = fs::File::create(path).expect("create docx fixture");
+        let mut writer = zip::ZipWriter::new(file);
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        writer
+            .start_file("word/document.xml", options)
+            .expect("start document XML");
+        writer
+            .write_all(document_xml.as_bytes())
+            .expect("write document XML");
+        writer.finish().expect("finish docx fixture");
+    }
 }
 
 #[tauri::command]
@@ -2659,8 +3806,10 @@ pub fn run() {
             repair_local_project_structure,
             pick_local_project_directory,
             read_local_text_file,
+            read_local_document_text_file,
             read_local_binary_file,
             write_local_text_file,
+            write_local_generated_document_file,
             create_local_markdown_file,
             create_local_directory,
             rename_local_project_entry,

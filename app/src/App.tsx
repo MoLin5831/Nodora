@@ -155,6 +155,7 @@ import {
   getModelApiKeyStatus,
   moveLocalProjectEntry,
   readLocalBinaryFile,
+  readLocalDocumentTextFile,
   readLocalDirectoryTree,
   readLocalTextFile,
   renderDocxFromHtml,
@@ -167,6 +168,7 @@ import {
   saveModelApiKeyToCredentialStore,
   supportsDesktopBackendInvoke,
   validateLocalProjectRoot,
+  writeLocalGeneratedDocumentFile,
   writeLocalTextFile,
   type DesktopBackendStatus,
   type DesktopLocalFileTreeNode,
@@ -8134,7 +8136,16 @@ export function App() {
         }
 
         if (!isSupportedDirectProjectFilePath(normalizedPath)) {
-          skipped.push({ path: normalizedPath, reason: "当前 AI 直接写入只支持安全文本文件：.md/.txt/.json/.csv/.tsv/.yml/.yaml/.mmd/.mermaid" });
+          skipped.push({
+            path: normalizedPath,
+            reason: "当前 AI 直接写入只支持安全文本文件和桌面生成文档：.md/.txt/.json/.csv/.tsv/.yml/.yaml/.mmd/.mermaid/.docx/.xlsx",
+          });
+          continue;
+        }
+
+        const generatedDocument = isGeneratedProjectDocumentPath(normalizedPath);
+        if (generatedDocument && source.kind !== "desktop") {
+          skipped.push({ path: normalizedPath, reason: "Word/Excel 直接生成需要桌面后端；请在桌面版中执行该项目文件任务" });
           continue;
         }
 
@@ -8163,7 +8174,7 @@ export function App() {
             }));
           }
 
-          if (!explicitMutation && await readProjectStorageTextFileSnapshotIfExists(source, storagePath)) {
+          if (!explicitMutation && await readProjectStorageDocumentTextFileSnapshotIfExists(source, storagePath)) {
             skipped.push({ path: storagePath, reason: "关键文件已存在；请明确说明覆盖、更新或追加后再写入" });
             continue;
           }
@@ -8181,15 +8192,19 @@ export function App() {
           await ensureProjectStorageDirectoryPath(source, parentPath);
         }
 
-        if (!resolved.existing) {
+        if (!generatedDocument && !resolved.existing) {
           await createProjectTextFile(source, resolved.path);
         }
 
         if (taskMessageId) {
           appendProjectFileTaskLog(taskMessageId, "写入文件", resolved.path, "running");
         }
-        const saved = await writeProjectStorageTextFile(source, resolved.path, resolved.content);
-        syncOpenStorageFileAfterWrite(resolved.path, saved);
+        const saved = generatedDocument
+          ? await writeProjectGeneratedDocumentFile(source, resolved.path, resolved.content)
+          : await writeProjectStorageTextFile(source, resolved.path, resolved.content);
+        if (!generatedDocument && "content" in saved) {
+          syncOpenStorageFileAfterWrite(resolved.path, saved);
+        }
         if (taskMessageId) {
           appendProjectFileTaskLog(taskMessageId, "完成写入", resolved.path);
         }
@@ -8695,7 +8710,7 @@ export function App() {
     }
 
     for (const candidate of candidates) {
-      if (isSupportedProjectFileReadPath(candidate) && await readProjectStorageTextFileSnapshotIfExists(source, candidate)) {
+      if (isSupportedProjectFileReadPath(candidate) && await readProjectStorageDocumentTextFileSnapshotIfExists(source, candidate)) {
         return candidate;
       }
     }
@@ -8715,7 +8730,7 @@ export function App() {
     }
 
     try {
-      const snapshot = await readProjectStorageTextFileSnapshot(source, storagePath);
+      const snapshot = await readProjectStorageDocumentTextFileSnapshot(source, storagePath);
       return {
         path: storagePath,
         content: truncateProjectFileTaskReadContent(snapshot.content),
@@ -8920,9 +8935,19 @@ export function App() {
     file: ProjectFileWritePlanItem,
     explicitMutation: boolean,
   ): Promise<{ path: string; mode: ProjectFileWriteMode; content: string; existing: boolean }> {
-    const existing = await readProjectStorageTextFileSnapshotIfExists(source, preferredPath);
+    const generatedDocument = isGeneratedProjectDocumentPath(preferredPath);
+    const existing = await readProjectStorageDocumentTextFileSnapshotIfExists(source, preferredPath);
     if (!existing) {
       return { path: preferredPath, mode: "create", content: file.content, existing: false };
+    }
+
+    if (generatedDocument) {
+      if (file.mode === "overwrite" && explicitMutation) {
+        return { path: preferredPath, mode: "overwrite", content: file.content, existing: true };
+      }
+
+      const availablePath = await nextAvailableProjectFilePath(source, preferredPath);
+      return { path: availablePath, mode: "create", content: file.content, existing: false };
     }
 
     if (file.mode === "append" && explicitMutation) {
@@ -8950,6 +8975,14 @@ export function App() {
     }
   }
 
+  async function readProjectStorageDocumentTextFileSnapshotIfExists(source: ProjectSource, storagePath: string) {
+    try {
+      return await readProjectStorageDocumentTextFileSnapshot(source, storagePath);
+    } catch {
+      return null;
+    }
+  }
+
   async function nextAvailableProjectFilePath(source: ProjectSource, preferredPath: string) {
     const extensionIndex = preferredPath.lastIndexOf(".");
     const base = extensionIndex >= 0 ? preferredPath.slice(0, extensionIndex) : preferredPath;
@@ -8957,7 +8990,7 @@ export function App() {
 
     for (let index = 2; index < 1000; index += 1) {
       const candidate = `${base}-${index}${extension}`;
-      const existing = await readProjectStorageTextFileSnapshotIfExists(source, candidate);
+      const existing = await readProjectStorageDocumentTextFileSnapshotIfExists(source, candidate);
       if (!existing) {
         return candidate;
       }
@@ -11243,6 +11276,32 @@ async function readProjectStorageTextFileSnapshot(source: ProjectSource, storage
   return readLocalTextFile({ projectRoot: source.rootPath, relativePath: storagePath });
 }
 
+async function readProjectStorageDocumentTextFileSnapshot(source: ProjectSource, storagePath: string) {
+  if (source.kind === "browser") {
+    if (/\.docx$/i.test(storagePath)) {
+      const snapshot = await readProjectStorageBlobFileSnapshot(source, storagePath);
+      const docxPreview = await renderDocxPreview(snapshot.blob);
+      return {
+        content: normalizeExtractedDocumentText(docxPreview.text),
+        lastModified: snapshot.lastModified,
+        size: snapshot.size,
+      };
+    }
+
+    if (/\.pdf$/i.test(storagePath)) {
+      throw new Error("PDF text extraction is available in the desktop app.");
+    }
+
+    if (/\.xlsx$/i.test(storagePath)) {
+      throw new Error("Excel text extraction is available in the desktop app.");
+    }
+
+    return readTextFileSnapshot(source.handle, storagePath);
+  }
+
+  return readLocalDocumentTextFile({ projectRoot: source.rootPath, relativePath: storagePath });
+}
+
 async function writeProjectTextFile(source: ProjectSource, relativePath: string, content: string) {
   const storagePath = projectStoragePath(source, relativePath);
   return writeProjectStorageTextFile(source, storagePath, content);
@@ -11254,6 +11313,27 @@ async function writeProjectStorageTextFile(source: ProjectSource, storagePath: s
   }
 
   return writeLocalTextFile({ projectRoot: source.rootPath, relativePath: storagePath, content });
+}
+
+async function writeProjectGeneratedDocumentFile(source: ProjectSource, storagePath: string, content: string) {
+  if (source.kind !== "desktop") {
+    throw new Error("Word/Excel generation requires the desktop backend.");
+  }
+
+  const generatedContent = /\.docx$/i.test(storagePath)
+    ? await renderMarkdownExportHtml({
+        content,
+        filePath: storagePath,
+        projectRoot: null,
+        title: projectFileTitleFromPath(storagePath),
+      })
+    : content;
+
+  return writeLocalGeneratedDocumentFile({
+    projectRoot: source.rootPath,
+    relativePath: storagePath,
+    content: generatedContent,
+  });
 }
 
 async function readProjectStorageBlobFileSnapshot(source: ProjectSource, storagePath: string) {
@@ -11273,6 +11353,31 @@ async function readProjectImageBlob(source: ProjectSource, relativePath: string)
   const storagePath = projectStoragePath(source, relativePath);
   const snapshot = await readProjectStorageBlobFileSnapshot(source, storagePath);
   return snapshot.blob;
+}
+
+function normalizeExtractedDocumentText(content: string) {
+  const cleaned = content
+    .replace(/\r\n?/g, "\n")
+    .split("\n")
+    .map((line) => line.trim())
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+
+  return cleaned || "No extractable text was found. The document may be scanned, empty, protected, or image-only.";
+}
+
+function isGeneratedProjectDocumentPath(path: string) {
+  return /\.(docx|xlsx)$/i.test(path);
+}
+
+function projectFileTitleFromPath(path: string) {
+  return path
+    .split("/")
+    .pop()
+    ?.replace(/\.(docx|xlsx)$/i, "")
+    .replace(/[-_]+/g, " ")
+    .trim() || "Nodora Document";
 }
 
 function projectStoragePath(source: ProjectSource, relativePath: string) {

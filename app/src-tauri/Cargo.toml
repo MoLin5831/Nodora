@@ -14,8 +14,11 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 keyring = "3"
+pdf-extract = "0.10.0"
+quick-xml = "0.39.4"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tauri = { version = "2", features = [] }
 windows = { version = "0.61.3", features = ["Win32_Foundation", "Win32_Security_Cryptography", "Win32_System_Com", "Win32_UI_Shell"] }
+zip = { version = "2.4.2", default-features = false, features = ["deflate"] }

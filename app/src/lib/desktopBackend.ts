@@ -54,6 +54,8 @@ export interface DesktopLocalTextFileWriteRequest extends DesktopLocalTextFileRe
   content: string;
 }
 
+export interface DesktopLocalGeneratedDocumentWriteRequest extends DesktopLocalTextFileWriteRequest {}
+
 export interface DesktopLocalCreateMarkdownFileRequest extends DesktopLocalTextFileRequest {}
 
 export interface DesktopLocalCreateDirectoryRequest extends DesktopLocalTextFileRequest {}
@@ -264,6 +266,17 @@ export async function readLocalTextFile(
   return invoke<DesktopLocalTextFileSnapshot>("read_local_text_file", { request });
 }
 
+export async function readLocalDocumentTextFile(
+  request: DesktopLocalTextFileRequest,
+): Promise<DesktopLocalTextFileSnapshot> {
+  const invoke = getTauriInvoke();
+  if (!invoke) {
+    throw new Error("Desktop backend is unavailable.");
+  }
+
+  return invoke<DesktopLocalTextFileSnapshot>("read_local_document_text_file", { request });
+}
+
 export async function readLocalBinaryFile(
   request: DesktopLocalTextFileRequest,
 ): Promise<DesktopLocalBinaryFileSnapshot> {
@@ -284,6 +297,17 @@ export async function writeLocalTextFile(
   }
 
   return invoke<DesktopLocalTextFileSnapshot>("write_local_text_file", { request });
+}
+
+export async function writeLocalGeneratedDocumentFile(
+  request: DesktopLocalGeneratedDocumentWriteRequest,
+): Promise<DesktopLocalBinaryFileSnapshot> {
+  const invoke = getTauriInvoke();
+  if (!invoke) {
+    throw new Error("Desktop backend is unavailable.");
+  }
+
+  return invoke<DesktopLocalBinaryFileSnapshot>("write_local_generated_document_file", { request });
 }
 
 export async function createLocalMarkdownFile(

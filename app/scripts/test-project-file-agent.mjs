@@ -23,6 +23,10 @@ try {
       true,
     );
     assert.equal(projectFileAgent.isProjectFileTaskIntent("读取项目内 docs/brief.md 这份文档并总结重点"), true);
+    assert.equal(projectFileAgent.isProjectFileTaskIntent("读取项目内 docs/brief.pdf 并总结重点"), true);
+    assert.equal(projectFileAgent.isProjectFileTaskIntent("分析项目内的 Word 文档"), true);
+    assert.equal(projectFileAgent.isProjectFileTaskIntent("读取项目内 research/data.xlsx 并总结表格"), true);
+    assert.equal(projectFileAgent.isProjectFileTaskIntent("读取已有案子并完成项目背景建档，更新工作流状态"), true);
     assert.equal(projectFileAgent.isProjectFileTaskIntent("分析这个文档的重点"), false);
     assert.equal(projectFileAgent.projectFileTaskMentionsOnlineSearch("联网搜索竞品"), true);
     assert.equal(projectFileAgent.projectFileTaskShouldUseOnlineSearch("整理同类竞品资料，生成一份md报告"), true);
@@ -158,13 +162,19 @@ try {
 
   test("recognizes supported project read file extensions", () => {
     assert.equal(projectFileAgent.isSupportedProjectFileReadPath("资料/data.json"), true);
+    assert.equal(projectFileAgent.isSupportedProjectFileReadPath("资料/brief.docx"), true);
+    assert.equal(projectFileAgent.isSupportedProjectFileReadPath("资料/brief.pdf"), true);
+    assert.equal(projectFileAgent.isSupportedProjectFileReadPath("资料/data.xlsx"), true);
     assert.equal(projectFileAgent.isSupportedProjectFileReadPath("资料/image.png"), false);
+    assert.equal(projectFileAgent.isSupportedProjectFileReadPath("资料/legacy.doc"), false);
   });
 
   test("allows only safe text extensions for direct writes", () => {
     assert.equal(projectFileAgent.isSupportedDirectProjectFilePath("资料/data.json"), true);
     assert.equal(projectFileAgent.isSupportedDirectProjectFilePath("资料/list.csv"), true);
     assert.equal(projectFileAgent.isSupportedDirectProjectFilePath("资料/flow.mermaid"), true);
+    assert.equal(projectFileAgent.isSupportedDirectProjectFilePath("资料/report.docx"), true);
+    assert.equal(projectFileAgent.isSupportedDirectProjectFilePath("资料/workbook.xlsx"), true);
     assert.equal(projectFileAgent.isSupportedDirectProjectFilePath("src/app.ts"), false);
     assert.equal(projectFileAgent.isSupportedDirectProjectFilePath("资料/page.html"), false);
   });
