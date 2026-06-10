@@ -1,0 +1,18 @@
+---
+description: Secret handling and GitHub publishing safety
+alwaysApply: true
+---
+
+# Secret Handling
+
+- Do not read files excluded by `.cursorignore` or `.gitignore` unless the user explicitly asks and confirms the risk.
+- Do not add secrets, API keys, private keys, cookies, tokens, browser profiles, local databases, or production config to Git.
+- Treat `.env`, `.env.development`, `.env.production`, `.env.local`, `.env.*.local`, `secrets/`, `.secrets/`, `private/`, and `credentials/` as sensitive.
+- Committed `.env.example` files may contain only non-secret environment selectors or placeholders.
+- If a secret may have been exposed, stop and tell the user to rotate or revoke it before continuing.
+
+# Project Boundary
+
+- Do not restore local Agent mode, Agent CLI, command execution entry points, background agents, multi-agent orchestration, or built-in image generation.
+- Keep Nodora centered on the 14-step AI decision workflow.
+- Do not bypass user confirmation before changing the main planning document or memory files.

@@ -1,0 +1,98 @@
+# Dependencies
+node_modules/
+app/node_modules/
+
+# Frontend and desktop build output
+dist/
+app/dist/
+target/
+app/src-tauri/target/
+app/src-tauri/bundle/
+
+# Local QA output and browser profiles
+app/qa-output/
+playwright-report/
+test-results/
+
+# Local logs and transient dev-server state
+*.log
+*.err.log
+*.out.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+app/.tmp-dev-server.*
+app/.nodora-dev-server-*
+app/qa-dev-server.*
+app/.tmp-*/
+.tmp/
+
+# Local Codex / assistant working files
+.codex-logs/
+app/.codex-logs/
+
+# Internal planning and local handoff notes not intended for GitHub
+memory/
+sample_project/
+app_mvp_spec.md
+app_implementation_plan.md
+
+# Runtime workspaces and temporary export state
+.nodora/
+**/.nodora/
+
+# Environment files. Commit examples only; keep real .env files local.
+**/.env*
+!**/.env.example
+**/env.development
+**/env.production
+**/.env.development
+**/.env.production
+**/.env.local
+**/.env.*.local
+
+# Secrets, credentials, certificates, and local private config
+.secrets/
+secrets/
+private/
+credentials/
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+*.csr
+id_rsa
+id_rsa.*
+id_ed25519
+id_ed25519.*
+*.kdbx
+*.sqlite
+*.sqlite3
+*.db
+
+# Release artifacts belong in GitHub Releases, not in source commits
+*.exe
+*.msi
+*.dmg
+*.app
+*.deb
+*.rpm
+*.zip
+*.tar
+*.tgz
+*.tar.gz
+*.7z
+*.pdb
+*.dll
+
+# IDE and OS noise
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.example.json

@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/svg+xml" href="/nodora-icon.svg" />
+    <title>Nodora</title>
+    <style>
+      :root {
+        color: #202423;
+        background: #f6f7f5;
+        font-family: "Noto Sans SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+      }
+
+      body {
+        margin: 0;
+        background: #f6f7f5;
+      }
+
+      .boot-splash {
+        position: fixed;
+        inset: 0;
+        z-index: 9999;
+        display: grid;
+        place-items: center;
+        background: #f6f7f5;
+        opacity: 1;
+        transition: opacity 240ms ease, transform 240ms ease;
+      }
+
+      .boot-splash.boot-splash-exit {
+        opacity: 0;
+        transform: scale(1.01);
+        pointer-events: none;
+      }
+
+      .boot-card {
+        display: grid;
+        grid-template-columns: 44px minmax(0, 1fr);
+        gap: 14px;
+        align-items: center;
+        width: min(380px, calc(100vw - 48px));
+        border: 1px solid #d9ded8;
+        border-radius: 10px;
+        background: rgba(255, 255, 255, 0.94);
+        box-shadow: 0 18px 48px rgba(32, 36, 35, 0.16);
+        padding: 18px;
+      }
+
+      .boot-mark {
+        display: grid;
+        place-items: center;
+        width: 44px;
+        height: 44px;
+        overflow: hidden;
+        border-radius: 10px;
+        background: #171c1f;
+        box-shadow: 0 10px 28px rgba(23, 28, 31, 0.2);
+      }
+
+      .boot-mark img {
+        width: 100%;
+        height: 100%;
+      }
+
+      .boot-card strong {
+        display: block;
+        font-size: 18px;
+        line-height: 1.2;
+      }
+
+      .boot-card span {
+        display: block;
+        margin-top: 6px;
+        color: #66706b;
+        font-size: 13px;
+      }
+
+      .boot-progress {
+        grid-column: 1 / -1;
+        height: 4px;
+        overflow: hidden;
+        border-radius: 999px;
+        background: #eef1ee;
+      }
+
+      .boot-progress::before {
+        content: "";
+        display: block;
+        width: 42%;
+        height: 100%;
+        border-radius: inherit;
+        background: #1f6b5b;
+        animation: bootProgress 1.1s ease-in-out infinite;
+      }
+
+      @keyframes bootProgress {
+        0% {
+          transform: translateX(-110%);
+        }
+
+        100% {
+          transform: translateX(260%);
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .boot-splash {
+          transition-duration: 1ms;
+        }
+
+        .boot-progress::before {
+          animation-duration: 1ms;
+          animation-iteration-count: 1;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="boot-splash" class="boot-splash" role="status" aria-live="polite">
+      <section class="boot-card">
+        <div class="boot-mark" aria-hidden="true">
+          <img src="/nodora-icon.svg" alt="" />
+        </div>
+        <div>
+          <strong>Nodora</strong>
+          <span>正在启动本地工作台...</span>
+        </div>
+        <div class="boot-progress" aria-hidden="true"></div>
+      </section>
+    </div>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

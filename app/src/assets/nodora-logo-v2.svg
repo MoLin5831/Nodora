@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title desc">
+  <title id="title">Nodora logo</title>
+  <desc id="desc">A document page with connected decision nodes for Nodora.</desc>
+  <defs>
+    <linearGradient id="nodora-panel" x1="11" y1="9" x2="55" y2="58" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#182132" />
+      <stop offset="1" stop-color="#101827" />
+    </linearGradient>
+    <filter id="page-shadow" x="-20%" y="-20%" width="140%" height="140%" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="3" stdDeviation="3" flood-color="#000000" flood-opacity="0.24" />
+    </filter>
+  </defs>
+  <rect width="64" height="64" rx="16" fill="url(#nodora-panel)" />
+  <path d="M21 12h17l9 9v31a5 5 0 0 1-5 5H21a5 5 0 0 1-5-5V17a5 5 0 0 1 5-5Z" fill="#f6efe4" filter="url(#page-shadow)" />
+  <path d="M38 12v8a3 3 0 0 0 3 3h6" fill="#e4dbcd" />
+  <path d="M24 26h16M24 32h12M24 45h13" stroke="#c8bcae" stroke-width="2.4" stroke-linecap="round" opacity="0.7" />
+  <path d="M22 43 32 34l10-12" fill="none" stroke="#23c6b8" stroke-width="4.4" stroke-linecap="round" stroke-linejoin="round" />
+  <circle cx="22" cy="43" r="5.2" fill="#f2a64a" />
+  <circle cx="32" cy="34" r="5.4" fill="#101827" stroke="#23c6b8" stroke-width="2.8" />
+  <circle cx="42" cy="22" r="5.2" fill="#23c6b8" />
+  <circle cx="42" cy="22" r="2" fill="#f6efe4" opacity="0.95" />
+</svg>

@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title desc">
+  <title id="title">Nodora logo</title>
+  <desc id="desc">A node-shaped N mark for the Nodora decision document workbench.</desc>
+  <defs>
+    <filter id="soft-shadow" x="-20%" y="-20%" width="140%" height="140%" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="2" stdDeviation="2" flood-color="#000000" flood-opacity="0.22" />
+    </filter>
+  </defs>
+  <rect width="64" height="64" rx="16" fill="#171c1f" />
+  <rect x="5.5" y="5.5" width="53" height="53" rx="13" fill="none" stroke="#ffffff" stroke-opacity="0.1" />
+  <path
+    d="M18 46V18l28 28V18"
+    fill="none"
+    stroke="#f4efe7"
+    stroke-width="7"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    filter="url(#soft-shadow)"
+  />
+  <path
+    d="M20.5 20.5 43.5 43.5"
+    fill="none"
+    stroke="#4fd6c2"
+    stroke-width="2.8"
+    stroke-linecap="round"
+    opacity="0.95"
+  />
+  <circle cx="18" cy="18" r="4.2" fill="#f4efe7" />
+  <circle cx="46" cy="46" r="4.2" fill="#f4efe7" />
+  <circle cx="46" cy="18" r="4.2" fill="#ffb35c" />
+  <circle cx="32" cy="32" r="2.9" fill="#171c1f" stroke="#4fd6c2" stroke-width="1.8" />
+</svg>
