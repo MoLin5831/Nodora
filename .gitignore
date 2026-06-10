@@ -94,6 +94,7 @@ Thumbs.db
 desktop.ini
 .idea/
 .cursor/
+.cursorignore
 .vscode/*
 !.vscode/extensions.json
 !.vscode/settings.example.json
