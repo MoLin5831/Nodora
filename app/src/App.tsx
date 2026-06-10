@@ -1342,6 +1342,9 @@ const uiText = {
     saveConfig: "保存配置",
     testConnection: "测试连接",
     configSaved: "配置已保存。",
+    apiKeySavedLabel: "已保存",
+    apiKeySavedPlaceholder: "已保存 API Key，输入新值可替换",
+    apiKeySavedHint: "API Key 已保存在本机安全存储。此处不回显明文；输入新值后保存即可替换。",
     structure: "结构",
     passed: "通过",
     pendingValidation: "待校验",
@@ -1968,6 +1971,9 @@ const uiText = {
     saveConfig: "Save Settings",
     testConnection: "Test Connection",
     configSaved: "Settings saved.",
+    apiKeySavedLabel: "Saved",
+    apiKeySavedPlaceholder: "API Key saved; enter a new value to replace it",
+    apiKeySavedHint: "The API Key is stored in local secure storage. The secret is not shown here; enter a new value and save to replace it.",
     structure: "Structure",
     passed: "Passed",
     pendingValidation: "Pending",
@@ -9784,6 +9790,7 @@ export function App() {
           labels={labels}
           config={modelConfig}
           apiKey={storedModelApiKeyAvailable && supportsDesktopBackendInvoke() ? "" : modelApiKey}
+          hasSavedApiKey={storedModelApiKeyAvailable && supportsDesktopBackendInvoke()}
           status={modelStatus}
           statusMessage={modelStatusMessage}
           onClose={() => setModelDialogOpen(false)}
@@ -12506,6 +12513,7 @@ function ModelConfigDialog({
   labels,
   config,
   apiKey,
+  hasSavedApiKey,
   status,
   statusMessage,
   onClose,
@@ -12515,6 +12523,7 @@ function ModelConfigDialog({
   labels: UiLabels;
   config: ModelProviderConfig;
   apiKey: string;
+  hasSavedApiKey: boolean;
   status: ModelConnectionStatus;
   statusMessage: string;
   onClose: () => void;
@@ -12524,6 +12533,7 @@ function ModelConfigDialog({
   const [draft, setDraft] = useState<ModelProviderConfig>(config);
   const [draftApiKey, setDraftApiKey] = useState(apiKey);
   const [localMessage, setLocalMessage] = useState("");
+  const apiKeySecurelySaved = hasSavedApiKey && !draftApiKey.trim();
   const connectionMessage = statusMessage || localMessage || localizedModelStatusLabel(status, labels);
   const selectedOutputLength = closestModelOutputLength(draft.maxTokens);
   const selectedStyleTendency = closestModelStyleTendency(draft.temperature);
@@ -12593,14 +12603,18 @@ function ModelConfigDialog({
           </label>
 
           <label className="form-field span-2">
-            <span>API Key</span>
+            <span className="field-label-row">
+              <span>API Key</span>
+              {apiKeySecurelySaved && <strong className="saved-key-badge">{labels.apiKeySavedLabel}</strong>}
+            </span>
             <input
               value={draftApiKey}
               onChange={(event) => setDraftApiKey(event.target.value)}
-              placeholder="sk-..."
+              placeholder={apiKeySecurelySaved ? labels.apiKeySavedPlaceholder : "sk-..."}
               type="password"
               autoComplete="off"
             />
+            {apiKeySecurelySaved && <small>{labels.apiKeySavedHint}</small>}
           </label>
 
           <label className="form-field">

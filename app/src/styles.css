@@ -3271,6 +3271,26 @@ button:disabled {
   font-size: 12px;
 }
 
+.field-label-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.saved-key-badge {
+  flex: 0 0 auto;
+  border: 1px solid rgba(31, 107, 91, 0.22);
+  border-radius: 999px;
+  background: rgba(31, 107, 91, 0.1);
+  color: var(--primary);
+  padding: 1px 7px;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.5;
+}
+
 .form-field small {
   color: var(--text-muted);
   font-size: 11px;
