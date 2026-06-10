@@ -22,6 +22,8 @@ try {
       projectFileAgent.isProjectFileTaskIntent("联网搜索同类竞品的相关信息，整理成一份md格式的报告，放在资料文件夹中"),
       true,
     );
+    assert.equal(projectFileAgent.isProjectFileTaskIntent("读取项目内 docs/brief.md 这份文档并总结重点"), true);
+    assert.equal(projectFileAgent.isProjectFileTaskIntent("分析这个文档的重点"), false);
     assert.equal(projectFileAgent.projectFileTaskMentionsOnlineSearch("联网搜索竞品"), true);
     assert.equal(projectFileAgent.projectFileTaskShouldUseOnlineSearch("整理同类竞品资料，生成一份md报告"), true);
     assert.equal(projectFileAgent.projectFileTaskShouldUseOnlineSearch("总结项目内已有会议纪要，保存到资料文件夹"), false);
@@ -108,6 +110,23 @@ try {
     assert.equal(parsed.plan.continueAfterExecution, true);
     assert.equal(parsed.plan.files[0].path, "资料/竞品调研.md");
     assert.equal(parsed.plan.files[0].mode, "create");
+  });
+
+  test("parses read-only answers for project document requests", () => {
+    const parsed = projectFileAgent.parseProjectFileTaskPlan(`
+{
+  "summary": "已总结项目文档",
+  "answer": "## 重点\\n\\n- 第一项\\n- 第二项",
+  "readRequests": [],
+  "operations": [],
+  "files": []
+}
+`);
+
+    assert.equal(parsed.ok, true);
+    assert.equal(parsed.plan.answer, "## 重点\n\n- 第一项\n- 第二项");
+    assert.equal(parsed.plan.files.length, 0);
+    assert.equal(parsed.plan.operations.length, 0);
   });
 
   test("parses web search requests and clamps result count", () => {

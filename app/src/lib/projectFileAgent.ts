@@ -32,6 +32,7 @@ export interface ProjectFileOperationPlanItem {
 
 export interface ProjectFileTaskPlan {
   summary: string;
+  answer: string;
   notes: string[];
   readRequests: ProjectFileReadRequest[];
   webSearchRequests: ProjectFileWebSearchRequest[];
@@ -123,8 +124,11 @@ export function isProjectFileTaskIntent(input: string): boolean {
 
   const asksForProjectFileOperation =
     /(删除|移到|移动|挪到|重命名|改名|新建文件夹|创建文件夹|新建目录|创建目录|delete|remove|move|rename|mkdir|create directory)/i.test(text);
+  const asksForProjectFileRead =
+    /(读取|查看|看一下|看看|分析|总结|概括|解释|提炼|检查|read|inspect|analyze|analyse|summarize|summarise).{0,48}(项目内|项目里的|项目文件|资料[\\/]|docs[\\/]|research[\\/]|reports[\\/]|\.md|markdown)/i.test(text) ||
+    /(项目内|项目里的|项目文件).{0,48}(读取|查看|看一下|看看|分析|总结|概括|解释|提炼|检查|read|inspect|analyze|analyse|summarize|summarise)/i.test(text);
 
-  return (asksForFileOutput && mentionsProjectFileTarget) || asksForProjectFileOperation;
+  return (asksForFileOutput && mentionsProjectFileTarget) || asksForProjectFileOperation || asksForProjectFileRead;
 }
 
 export function projectFileTaskMentionsOnlineSearch(input: string): boolean {
@@ -217,6 +221,8 @@ export function buildProjectFileTaskMessages(input: ProjectFileTaskMessageInput)
         "- 如果请求读取目录，前端会先返回目录摘要和候选文件清单，再读取部分受支持文本文件正文；你可以根据目录摘要继续请求更具体的文件路径。",
         "- 不要请求绝对路径、隐藏目录、node_modules、dist、target 或项目外路径。",
         "- 已经提供在“补充读取的项目文件”里的内容，不要重复请求。",
+        "- 如果用户只要求读取、总结、分析或解释项目内文件，而没有要求写入项目文件，应在读取足够上下文后让 `files` 和 `operations` 保持为空，并在 `answer` 输出给用户看的完整回答。",
+        "- `answer` 可以使用 Markdown；但不要把它放进 `files[].content`，除非用户明确要求保存成文件。",
         "",
         "## 联网检索",
         onlineSearchRule,
@@ -238,6 +244,7 @@ export function buildProjectFileTaskMessages(input: ProjectFileTaskMessageInput)
         [
           "{",
           '  "summary": "一句话说明将写入什么；如果无法写入，说明原因",',
+          '  "answer": "只读任务给用户看的完整回答；如果本次会写文件，可以留空",',
           '  "notes": ["可选注意事项"],',
           '  "continueAfterExecution": false,',
           '  "readRequests": [',
@@ -360,6 +367,12 @@ export function parseProjectFileTaskPlan(raw: string): ProjectFileTaskParseResul
     ok: true,
     plan: {
       summary: stringValue(record.summary) || "AI 已生成项目文件写入计划。",
+      answer:
+        stringValue(record.answer) ||
+        stringValue(record.response) ||
+        stringValue(record.result) ||
+        stringValue(record.finalAnswer) ||
+        stringValue(record.final_answer),
       notes: Array.isArray(record.notes) ? record.notes.map(stringValue).filter(Boolean) : [],
       readRequests,
       webSearchRequests,

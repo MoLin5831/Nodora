@@ -7759,6 +7759,7 @@ export function App() {
       ok: true,
       plan: {
         summary: "AI 已完成项目文件读取，但没有生成可执行写入计划。",
+        answer: "",
         notes: ["已达到项目文件读取轮次上限。"],
         readRequests: [],
         webSearchRequests: [],
@@ -7842,12 +7843,19 @@ export function App() {
     execution: ProjectFileTaskExecutionResult,
     onlineSearchRequested: boolean,
     onlineSearchPerformed: boolean,
+    readOnlyResultAvailable: boolean,
   ) {
     const outputs = execution.written.map((file) => ({
       path: file.path,
       label: file.path.split("/").pop() || file.path,
     }));
-    const summary = buildProjectFileTaskCardSummary(instruction, execution, onlineSearchRequested, onlineSearchPerformed);
+    const summary = buildProjectFileTaskCardSummary(
+      instruction,
+      execution,
+      onlineSearchRequested,
+      onlineSearchPerformed,
+      readOnlyResultAvailable,
+    );
     updateProjectFileTaskMessage(messageId, (task) => ({
       ...task,
       status: execution.interrupted ? "cancelled" : "completed",
@@ -7920,13 +7928,31 @@ export function App() {
         return;
       }
 
+      const readOnlyResultAvailable = hasProjectFileTaskReadOnlyResult(loopResult);
       finishProjectFileTaskMessage(
         taskMessage.id,
         instruction,
         loopResult.execution,
         projectFileTaskMentionsOnlineSearch(instruction),
         loopResult.webSearchResults.some((entry) => entry.resultCount > 0),
+        readOnlyResultAvailable,
       );
+
+      if (readOnlyResultAvailable) {
+        setAiMessages((current) => [
+          ...current,
+          {
+            id: crypto.randomUUID(),
+            role: "assistant",
+            content: buildProjectFileTaskResultMessage(
+              loopResult.plan,
+              loopResult.execution,
+              projectFileTaskMentionsOnlineSearch(instruction),
+              loopResult.referencedFiles,
+            ),
+          },
+        ]);
+      }
 
       const firstWritten = loopResult.execution.written[0];
       if (firstWritten && !openFile?.dirty && firstWritten.path.endsWith(".md")) {
@@ -7936,7 +7962,9 @@ export function App() {
       setMessage(
         loopResult.execution.written.length > 0 || loopResult.execution.operations.length > 0
           ? `AI 已处理 ${loopResult.execution.written.length + loopResult.execution.operations.length} 个项目文件项目`
-          : "AI 未写入项目文件，请查看对话说明",
+          : readOnlyResultAvailable
+            ? "AI 已读取项目文件并生成回答"
+            : "AI 未写入项目文件，请查看对话说明",
       );
     } catch (nextError) {
       if (!isCurrentAiRequest(aiRequest)) {
@@ -8060,6 +8088,7 @@ export function App() {
     return {
       plan: finalPlan ?? {
         summary: "AI 未生成可执行项目文件计划。",
+        answer: "",
         notes: [],
         readRequests: [],
         webSearchRequests: [],
@@ -8410,6 +8439,7 @@ export function App() {
 
     return {
       summary: next.summary || current.summary,
+      answer: next.answer || current.answer,
       notes,
       readRequests: [...current.readRequests, ...next.readRequests],
       webSearchRequests: [...current.webSearchRequests, ...next.webSearchRequests],
@@ -8432,6 +8462,9 @@ export function App() {
     }
     if (plan.files.length > 0) {
       parts.push(`写入：${plan.files.map((file) => file.path).join("、")}`);
+    }
+    if (plan.answer.trim()) {
+      parts.push("生成只读回答");
     }
     if (plan.continueAfterExecution) {
       parts.push("执行后继续下一轮");
@@ -8954,7 +8987,7 @@ export function App() {
     onlineSearchRequested: boolean,
     referencedFiles: ProjectFileTaskReadEntry[],
   ) {
-    const parts = [plan.summary.trim() || "项目文件任务已处理。"];
+    const parts = [plan.answer.trim() || plan.summary.trim() || "项目文件任务已处理。"];
 
     if (referencedFiles.length > 0) {
       const listedFiles = referencedFiles.slice(0, 12).map((file) => `- ${file.path}`);
@@ -9014,6 +9047,7 @@ export function App() {
     execution: ProjectFileTaskExecutionResult,
     onlineSearchRequested: boolean,
     onlineSearchPerformed: boolean,
+    readOnlyResultAvailable: boolean,
   ) {
     const resultBoundary = buildProjectFileTaskResultBoundaryText(execution);
     if (execution.interrupted) {
@@ -9062,7 +9096,22 @@ export function App() {
       return "任务已结束，部分请求因保护规则、确认取消或路径限制未执行。";
     }
 
+    if (readOnlyResultAvailable) {
+      return onlineSearchPerformed
+        ? "已基于联网检索和项目文件生成回答。"
+        : "已读取项目文件并生成回答。";
+    }
+
     return "任务已结束，未产生项目文件变更。";
+  }
+
+  function hasProjectFileTaskReadOnlyResult(loopResult: ProjectFileTaskLoopResult) {
+    return Boolean(
+      !loopResult.execution.interrupted &&
+        loopResult.execution.written.length === 0 &&
+        loopResult.execution.operations.length === 0 &&
+        (loopResult.plan.answer.trim() || loopResult.referencedFiles.length > 0 || loopResult.webSearchResults.length > 0),
+    );
   }
 
   function appendProjectFileTaskResultBoundary(summary: string, resultBoundary: string) {
