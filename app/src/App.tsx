@@ -1539,6 +1539,7 @@ const uiText = {
     modelStatusUntested: "模型未测试",
     modelStatusUnconfigured: "模型未配置",
     modelConfigSavedWithKey: "配置已保存。桌面版 API Key 保存在系统凭据库；浏览器版仅保存在当前会话。",
+    modelConfigSavedSessionOnly: "配置已保存。本机系统凭据库暂不可用，API Key 将仅在当前会话中保留；关闭应用后需要重新输入。",
     modelConfigSavedWithoutKey: "配置已保存，但未填写 API Key。",
     modelTestingConnection: "正在测试连接...",
     configureAiBackendFirst: "请先配置可用的 AI 后端。",
@@ -2164,6 +2165,7 @@ const uiText = {
     modelStatusUntested: "Not Tested",
     modelStatusUnconfigured: "Model Not Configured",
     modelConfigSavedWithKey: "Settings saved. The desktop app stores API keys in the OS credential store; the browser fallback keeps them only for the current session.",
+    modelConfigSavedSessionOnly: "Settings saved. The OS credential store is unavailable, so the API Key is kept only for the current session; re-enter it after restarting the app.",
     modelConfigSavedWithoutKey: "Settings saved, but API Key is empty.",
     modelTestingConnection: "Testing connection...",
     configureAiBackendFirst: "Configure a usable AI backend first.",
@@ -2237,6 +2239,12 @@ const uiText = {
 } satisfies Record<AppLanguage, Record<string, string>>;
 
 type UiLabels = (typeof uiText)[AppLanguage];
+
+interface ModelConfigSaveResult {
+  clearApiKey: boolean;
+  message: string;
+  warning?: string;
+}
 
 function localizedModelStatusLabel(status: ModelConnectionStatus, labels: UiLabels) {
   switch (status) {
@@ -5297,13 +5305,17 @@ export function App() {
     setExpanded(next);
   }
 
-  async function handleSaveModelConfig(nextConfig: ModelProviderConfig, nextApiKey: string) {
+  async function handleSaveModelConfig(
+    nextConfig: ModelProviderConfig,
+    nextApiKey: string,
+  ): Promise<ModelConfigSaveResult> {
     const trimmedApiKey = nextApiKey.trim();
     const currentSessionApiKey = modelApiKey.trim();
     const nextSessionApiKey = trimmedApiKey || currentSessionApiKey;
     let hasCredential = storedModelApiKeyAvailable;
     let saveMessage = "";
     let statusApiKey = trimmedApiKey;
+    let clearDraftApiKey = false;
 
     saveModelConfig(nextConfig);
 
@@ -5316,28 +5328,36 @@ export function App() {
           const status = await getModelApiKeyStatus();
           hasCredential = status.available;
         }
-        clearPersistedModelApiKeys();
+        if (trimmedApiKey && !hasCredential) {
+          saveModelApiKey(nextSessionApiKey);
+          saveMessage = labels.modelConfigSavedSessionOnly;
+        } else {
+          clearPersistedModelApiKeys();
+        }
         setModelApiKey(nextSessionApiKey);
         statusApiKey = nextSessionApiKey;
-      } catch (error) {
+        clearDraftApiKey = Boolean(trimmedApiKey && hasCredential);
+      } catch {
         hasCredential = false;
         saveModelApiKey(nextSessionApiKey);
         setModelApiKey(nextSessionApiKey);
         statusApiKey = nextSessionApiKey;
-        saveMessage = error instanceof Error ? error.message : String(error);
+        saveMessage = labels.modelConfigSavedSessionOnly;
       }
     } else {
       hasCredential = false;
       saveModelApiKey(trimmedApiKey);
       setModelApiKey(trimmedApiKey);
+      clearDraftApiKey = Boolean(trimmedApiKey);
     }
 
+    const message =
+      saveMessage || (hasCredential || trimmedApiKey ? labels.modelConfigSavedWithKey : labels.modelConfigSavedWithoutKey);
     setStoredModelApiKeyAvailable(hasCredential);
     setModelConfig(nextConfig);
     setModelStatus(modelStatusFromConfig(nextConfig, statusApiKey, hasCredential));
-    setModelStatusMessage(
-      saveMessage || (hasCredential || trimmedApiKey ? labels.modelConfigSavedWithKey : labels.modelConfigSavedWithoutKey),
-    );
+    setModelStatusMessage(message);
+    return { clearApiKey: clearDraftApiKey, message, warning: saveMessage || undefined };
   }
 
   async function handleTestModelConfig(nextConfig: ModelProviderConfig, nextApiKey: string) {
@@ -5352,9 +5372,9 @@ export function App() {
     setModelStatusMessage(result.message);
 
     if (result.ok) {
-      await handleSaveModelConfig(nextConfig, nextApiKey);
+      const saveResult = await handleSaveModelConfig(nextConfig, nextApiKey);
       setModelStatus("connected");
-      setModelStatusMessage(result.message);
+      setModelStatusMessage(saveResult.warning || result.message);
     }
   }
 
@@ -12498,7 +12518,7 @@ function ModelConfigDialog({
   status: ModelConnectionStatus;
   statusMessage: string;
   onClose: () => void;
-  onSave: (config: ModelProviderConfig, apiKey: string) => Promise<void>;
+  onSave: (config: ModelProviderConfig, apiKey: string) => Promise<ModelConfigSaveResult>;
   onTest: (config: ModelProviderConfig, apiKey: string) => Promise<void>;
 }) {
   const [draft, setDraft] = useState<ModelProviderConfig>(config);
@@ -12526,9 +12546,11 @@ function ModelConfigDialog({
   async function handleSave() {
     const nextDraft = normalizeFriendlyModelConfig(draft);
     setDraft(nextDraft);
-    await onSave(nextDraft, draftApiKey);
-    setDraftApiKey("");
-    setLocalMessage(labels.configSaved);
+    const result = await onSave(nextDraft, draftApiKey);
+    if (result.clearApiKey) {
+      setDraftApiKey("");
+    }
+    setLocalMessage(result.message || labels.configSaved);
   }
 
   async function handleTest() {
