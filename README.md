@@ -85,7 +85,7 @@ workflow_prototype/
   app/                 Tauri + React 应用
   project_template/    默认 Nodora 项目结构
   templates/           工作流提示词与文档模板
-  docs/                公开架构、路线图和安全说明
+  docs/                公开架构说明
 ```
 
 以下本地开发内容不会发布：
@@ -99,9 +99,7 @@ workflow_prototype/
 ## 文档
 
 - [架构说明](docs/architecture.md)
-- [路线图](docs/roadmap.md)
-- [GitHub 发布边界](docs/github-publish-boundary.md)
-- [贡献指南](CONTRIBUTING.md)
+- [安全策略](SECURITY.md)
 
 ## 开源协议
 
