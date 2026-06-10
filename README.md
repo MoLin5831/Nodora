@@ -88,14 +88,6 @@ workflow_prototype/
   docs/                公开架构说明
 ```
 
-以下本地开发内容不会发布：
-
-- `memory/`
-- `sample_project/`
-- `app_mvp_spec.md`
-- `app_implementation_plan.md`
-- 构建产物、浏览器 QA 配置、本地日志和真实环境配置文件
-
 ## 文档
 
 - [架构说明](docs/architecture.md)
